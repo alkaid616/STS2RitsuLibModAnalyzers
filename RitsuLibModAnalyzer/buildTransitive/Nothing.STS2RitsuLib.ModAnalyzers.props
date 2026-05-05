@@ -1,0 +1,7 @@
+<Project>
+    <ItemGroup>
+        <Analyzer
+                Include="$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\Nothing.STS2RitsuLib.ModAnalyzers.dll"
+                Condition="Exists('$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\Nothing.STS2RitsuLib.ModAnalyzers.dll')" />
+    </ItemGroup>
+</Project>
