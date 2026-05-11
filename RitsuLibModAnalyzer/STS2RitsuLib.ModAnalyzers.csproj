@@ -37,6 +37,12 @@
         <NuGetPushTimeoutSeconds Condition="'$(NuGetPushTimeoutSeconds)' == ''">300</NuGetPushTimeoutSeconds>
         <AllowNonReleaseNuGetPublish Condition="'$(AllowNonReleaseNuGetPublish)' == ''">false</AllowNonReleaseNuGetPublish>
         <InstallAnalyzerOnPack Condition="'$(InstallAnalyzerOnPack)' == ''">true</InstallAnalyzerOnPack>
+        <NuGetGlobalPackagesFolder Condition="'$(NuGetGlobalPackagesFolder)' == ''">$(USERPROFILE)\.nuget\packages</NuGetGlobalPackagesFolder>
+        <LocalAnalyzerInstallProjectDir Condition="'$(LocalAnalyzerInstallProjectDir)' == ''">$(MSBuildProjectDirectory)\obj\AnalyzerGlobalCacheInstall</LocalAnalyzerInstallProjectDir>
+        <LocalAnalyzerInstallProjectPath Condition="'$(LocalAnalyzerInstallProjectPath)' == ''">$(LocalAnalyzerInstallProjectDir)\AnalyzerGlobalCacheInstall.csproj</LocalAnalyzerInstallProjectPath>
+        <AnalyzerPackageIdFolder>$([System.String]::Copy('$(PackageId)').ToLowerInvariant())</AnalyzerPackageIdFolder>
+        <AnalyzerPackageVersionFolder>$([System.String]::Copy('$(PackageVersion)').ToLowerInvariant())</AnalyzerPackageVersionFolder>
+        <LocalAnalyzerGlobalPackageCachePath>$(NuGetGlobalPackagesFolder)\$(AnalyzerPackageIdFolder)\$(AnalyzerPackageVersionFolder)</LocalAnalyzerGlobalPackageCachePath>
     </PropertyGroup>
 
     <ItemGroup>
@@ -59,9 +65,28 @@
     <Target Name="PackAnalyzer" DependsOnTargets="Pack" />
 
     <Target Name="_InstallAnalyzerPackage">
-        <Message Importance="High" Text="Installing local analyzer package: $(LocalAnalyzerPackagePath)" />
-        <Exec Command="dotnet new uninstall &quot;$(PackageId)&quot;" IgnoreExitCode="true" />
-        <Exec Command="dotnet new install &quot;$(LocalAnalyzerPackagePath)&quot;" />
+        <Error Condition="!Exists('$(LocalAnalyzerPackagePath)')"
+               Text="Package file was not found: $(LocalAnalyzerPackagePath)" />
+        <Message Importance="High" Text="Installing local analyzer package to NuGet global package cache: $(LocalAnalyzerGlobalPackageCachePath)" />
+        <RemoveDir Directories="$(LocalAnalyzerGlobalPackageCachePath)"
+                   Condition="Exists('$(LocalAnalyzerGlobalPackageCachePath)')" />
+        <MakeDir Directories="$(LocalAnalyzerInstallProjectDir)" />
+        <ItemGroup>
+            <_LocalAnalyzerInstallProjectLines Include="&lt;Project Sdk=&quot;Microsoft.NET.Sdk&quot;&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="  &lt;PropertyGroup&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="    &lt;TargetFramework&gt;netstandard2.0&lt;/TargetFramework&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="  &lt;/PropertyGroup&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="  &lt;ItemGroup&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="    &lt;PackageReference Include=&quot;$(PackageId)&quot; Version=&quot;$(PackageVersion)&quot; /&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="  &lt;/ItemGroup&gt;" />
+            <_LocalAnalyzerInstallProjectLines Include="&lt;/Project&gt;" />
+        </ItemGroup>
+        <WriteLinesToFile File="$(LocalAnalyzerInstallProjectPath)"
+                          Lines="@(_LocalAnalyzerInstallProjectLines)"
+                          Overwrite="true" />
+        <Exec Command="dotnet restore &quot;$(LocalAnalyzerInstallProjectPath)&quot; --packages &quot;$(NuGetGlobalPackagesFolder)&quot; --source &quot;$(PackageOutputPath)&quot; --force --no-cache" />
+        <Error Condition="!Exists('$(LocalAnalyzerGlobalPackageCachePath)\$(AnalyzerPackageIdFolder).nuspec')"
+               Text="Package was not installed to the NuGet global package cache: $(LocalAnalyzerGlobalPackageCachePath)" />
     </Target>
 
     <Target Name="InstallAnalyzer" DependsOnTargets="Pack;_InstallAnalyzerPackage" />
