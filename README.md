@@ -51,6 +51,15 @@ localization/zhs.json
 | `RITSU014` | Warning | FMOD 字符串形状问题。 |
 | `RITSU015` | Warning | runtime helper 字面量问题。 |
 | `RITSU016` | Info | 旧式 pool hook 覆写。 |
+| `RITSU017` | Warning | 可释放句柄未释放（PlayLoop / PlayMusic / CreateManualScope / SubscribeLifecycle）。 |
+| `RITSU018` | Error | `ModContentPackBuilder.For()` 链没有调用 `.Apply()`。 |
+| `RITSU019` | Warning | `AudioSource.Event` / `Snapshot` / `Guid` 路径前缀不正确。 |
+| `RITSU020` | Warning | `[ModInterop]` 目标 mod id 为空或格式不推荐。 |
+| `RITSU021` | Info | 旧式 `StartingDeckTypes` / `StartingRelicTypes` / `StartingPotionTypes` 覆写。 |
+| `RITSU022` | Warning | `AddSubpage` 引用了不存在的 settings page。 |
+| `RITSU023` | Warning | `[InteropTarget]` 在 `[ModInterop]` 类之外使用。 |
+| `RITSU024` | Warning | 同一 section 中重复引用 subpage。 |
+| `RITSU025` | Warning | `SubscribeLifecycleOnce` 的事件类型不是 sealed class 或 struct。 |
 
 `RITSU001` 会检查：
 
@@ -86,19 +95,26 @@ Rider 可以加载 NuGet 包中的 Roslyn analyzer 和 code fix。启用 Roslyn 
 
 可用修复：
 
-- `添加缺失的本地化键到 ...`
-- `插入本地化 JSON 片段`
-- `插入 RegisterModAssembly 样板`
-- `插入 EnsureGodotScriptsRegistered 样板`
-- `为 content pack 添加 .Apply()`
-- `生成 settings callback/provider stub`
-- `生成 patch 必要成员 stub`
-- `插入 RitsuLib TODO 修复片段`
+- `添加缺失的本地化键到 ...`（RITSU001）— 追加缺失 key，值为 `""`；目标文件不存在时自动创建。
+- `插入本地化 JSON 片段`（RITSU001）— 在诊断位置附近插入注释形式的 JSON，方便手动复制。
+- `插入 RegisterModAssembly 样板`（RITSU004）
+- `插入 EnsureGodotScriptsRegistered 样板`（RITSU005）
+- `为 content pack 添加 .Apply()`（RITSU006 / RITSU018）
+- `生成 settings callback/provider stub`（RITSU009）
+- `生成 patch 必要成员 stub`（RITSU011 / RITSU012）
+- `用 using 语句包装`（RITSU017）— 将 `PlayLoop` / `SubscribeLifecycle` 等返回值包装为 `using var`。
+- `添加 event:/ 前缀`（RITSU019）— 自动补全 `AudioSource.Event` / `Snapshot` 缺失的 FMOD 路径前缀。
+- `插入 RitsuLib TODO 修复片段`（兜底）
 
-JSON 修复会追加缺失 key，值为 `""`；如果目标 table 文件不存在，会在同一个
-localization 文件夹下创建它。
+此外，对 RitsuLib 已标记 `[Obsolete]` 的 API 调用（编译器 CS0618），Rider 会额外提供迁移修复：
 
-snippet 修复会在诊断位置附近插入注释形式的 JSON 片段，方便手动复制。
+| 旧 API | 迁移目标 |
+| --- | --- |
+| `ModKeywordRegistry.Register()` | `RegisterOwned()` |
+| `ModKeywordRegistry.RegisterCardKeyword()` | `RegisterCardKeywordOwnedByLocNamespace()` |
+| `ModContentPackBuilder.CardKeyword()` | `CardKeywordOwnedByLocNamespace()` |
+| `ModContentPackBuilder.Keyword()` | `KeywordOwned()` |
+| `AddSlider(..., float, ...)` | `AddSlider(..., double, ...)` |
 
 ## 本地开发
 

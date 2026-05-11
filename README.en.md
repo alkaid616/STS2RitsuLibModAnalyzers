@@ -51,6 +51,15 @@ localization/zhs.json
 | `RITSU014` | Warning | FMOD string shape issue. |
 | `RITSU015` | Warning | Runtime helper literal issue. |
 | `RITSU016` | Info | Legacy pool hook override. |
+| `RITSU017` | Warning | Disposable handle not disposed (PlayLoop / PlayMusic / CreateManualScope / SubscribeLifecycle). |
+| `RITSU018` | Error | `ModContentPackBuilder.For()` chain does not call `.Apply()`. |
+| `RITSU019` | Warning | `AudioSource.Event` / `Snapshot` / `Guid` path prefix is incorrect. |
+| `RITSU020` | Warning | `[ModInterop]` target mod id is empty or has a discouraged format. |
+| `RITSU021` | Info | Legacy `StartingDeckTypes` / `StartingRelicTypes` / `StartingPotionTypes` override. |
+| `RITSU022` | Warning | `AddSubpage` references a non-existent settings page. |
+| `RITSU023` | Warning | `[InteropTarget]` used outside a `[ModInterop]` class. |
+| `RITSU024` | Warning | Duplicate subpage reference in the same section. |
+| `RITSU025` | Warning | `SubscribeLifecycleOnce` event type is not a sealed class or struct. |
 
 `RITSU001` checks:
 
@@ -87,20 +96,26 @@ press `Alt+Enter`.
 
 Available fixes:
 
-- `Add missing localization keys to ...`
-- `Insert localization JSON snippet`
-- `Insert RegisterModAssembly boilerplate`
-- `Insert EnsureGodotScriptsRegistered boilerplate`
-- `Add .Apply() to content pack`
-- `Generate settings callback/provider stub`
-- `Generate required patch members stub`
-- `Insert RitsuLib TODO fix snippet`
+- `Add missing localization keys to ...` (RITSU001) — appends missing keys with empty values; creates the file if it does not exist.
+- `Insert localization JSON snippet` (RITSU001) — inserts a comment-form JSON near the diagnostic location for manual copy/paste.
+- `Insert RegisterModAssembly boilerplate` (RITSU004)
+- `Insert EnsureGodotScriptsRegistered boilerplate` (RITSU005)
+- `Add .Apply() to content pack` (RITSU006 / RITSU018)
+- `Generate settings callback/provider stub` (RITSU009)
+- `Generate required patch members stub` (RITSU011 / RITSU012)
+- `Wrap in using statement` (RITSU017) — wraps `PlayLoop` / `SubscribeLifecycle` return values in `using var`.
+- `Add event:/ prefix` (RITSU019) — prepends the missing FMOD path prefix to `AudioSource.Event` / `Snapshot` calls.
+- `Insert RitsuLib TODO fix snippet` (fallback)
 
-The JSON fix appends missing keys with empty string values and can create a
-missing table file under the same localization folder.
+Additionally, calls to RitsuLib APIs marked `[Obsolete]` (compiler CS0618) get migration fixes:
 
-The snippet fix inserts a comment-form JSON snippet near the diagnostic location
-for manual copy/paste.
+| Deprecated API | Migration target |
+| --- | --- |
+| `ModKeywordRegistry.Register()` | `RegisterOwned()` |
+| `ModKeywordRegistry.RegisterCardKeyword()` | `RegisterCardKeywordOwnedByLocNamespace()` |
+| `ModContentPackBuilder.CardKeyword()` | `CardKeywordOwnedByLocNamespace()` |
+| `ModContentPackBuilder.Keyword()` | `KeywordOwned()` |
+| `AddSlider(..., float, ...)` | `AddSlider(..., double, ...)` |
 
 ## Local Development
 
