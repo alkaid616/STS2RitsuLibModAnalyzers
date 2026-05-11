@@ -656,7 +656,9 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             .ToImmutableArray();
 
         var analyzer = new RitsuLibModAnalyzer();
-        var options = new AnalyzerOptions(additionalTexts);
+        var options = new AnalyzerOptions(
+            additionalTexts,
+            CreateAnalyzerConfigOptionsProvider(project));
         var compilationWithAnalyzers = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(analyzer),
             new CompilationWithAnalyzersOptions(
@@ -674,6 +676,12 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             .Cast<LocalizationFixRequest>()
             .Distinct()
             .ToImmutableArray();
+    }
+
+    private static AnalyzerConfigOptionsProvider CreateAnalyzerConfigOptionsProvider(Project project)
+    {
+        var projectDirectory = project.FilePath == null ? null : Path.GetDirectoryName(project.FilePath);
+        return new ProjectAnalyzerConfigOptionsProvider(projectDirectory);
     }
 
     private static async Task<bool> CanApplyJsonFixAsync(
@@ -1082,6 +1090,50 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         public override SourceText GetText(CancellationToken cancellationToken = default)
         {
             return _document.GetTextAsync(cancellationToken).GetAwaiter().GetResult();
+        }
+    }
+
+    private sealed class ProjectAnalyzerConfigOptionsProvider : AnalyzerConfigOptionsProvider
+    {
+        private readonly AnalyzerConfigOptions _globalOptions;
+
+        public ProjectAnalyzerConfigOptionsProvider(string? projectDirectory)
+        {
+            Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(projectDirectory))
+                options["build_property.MSBuildProjectDirectory"] = projectDirectory!;
+
+            _globalOptions = new ProjectAnalyzerConfigOptions(options);
+        }
+
+        public override AnalyzerConfigOptions GlobalOptions => _globalOptions;
+
+        public override AnalyzerConfigOptions GetOptions(SyntaxTree tree)
+        {
+            return Empty;
+        }
+
+        public override AnalyzerConfigOptions GetOptions(AdditionalText textFile)
+        {
+            return Empty;
+        }
+
+        private static AnalyzerConfigOptions Empty { get; } =
+            new ProjectAnalyzerConfigOptions(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private sealed class ProjectAnalyzerConfigOptions : AnalyzerConfigOptions
+    {
+        private readonly IReadOnlyDictionary<string, string> _options;
+
+        public ProjectAnalyzerConfigOptions(IReadOnlyDictionary<string, string> options)
+        {
+            _options = options;
+        }
+
+        public override bool TryGetValue(string key, out string value)
+        {
+            return _options.TryGetValue(key, out value!);
         }
     }
 

@@ -647,6 +647,7 @@ public sealed class RitsuLibModAnalyzerTests
     [Fact]
     public async Task ResPathAtProjectRootIsFoundInAdditionalFiles()
     {
+        var projectDirectory = CreateTemporaryProjectDirectory();
         var project = CreateProject(
             Source("""
                 public static void Build()
@@ -654,7 +655,8 @@ public sealed class RitsuLibModAnalyzerTests
                     RitsuLibFramework.LoadIcon("res://icon.svg");
                 }
                 """),
-            AdditionalFile(@"C:\mod\icon.svg", "<svg/>"));
+            projectDirectory,
+            AdditionalFile(Path.Combine(projectDirectory, "icon.svg"), "<svg/>"));
 
         var diagnostics = await AnalyzeProjectAsync(project);
         Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU013");
@@ -663,6 +665,7 @@ public sealed class RitsuLibModAnalyzerTests
     [Fact]
     public async Task ResPathUsesProjectRootRelativeSubpath()
     {
+        var projectDirectory = CreateTemporaryProjectDirectory();
         var project = CreateProject(
             Source("""
                 public static void Build()
@@ -670,7 +673,8 @@ public sealed class RitsuLibModAnalyzerTests
                     RitsuLibFramework.LoadIcon("res://Resources/sub/icon.png");
                 }
                 """),
-            AdditionalFile(@"C:\mod\Resources\sub\icon.png", ""));
+            projectDirectory,
+            AdditionalFile(Path.Combine(projectDirectory, "Resources", "sub", "icon.png"), ""));
 
         var diagnostics = await AnalyzeProjectAsync(project);
         Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU013");
@@ -679,6 +683,7 @@ public sealed class RitsuLibModAnalyzerTests
     [Fact]
     public async Task ResPathDoesNotMatchResourceMarkerRelativeSubpath()
     {
+        var projectDirectory = CreateTemporaryProjectDirectory();
         var project = CreateProject(
             Source("""
                 public static void Build()
@@ -686,7 +691,8 @@ public sealed class RitsuLibModAnalyzerTests
                     RitsuLibFramework.LoadIcon("res://sub/icon.png");
                 }
                 """),
-            AdditionalFile(@"C:\mod\Resources\sub\icon.png", ""));
+            projectDirectory,
+            AdditionalFile(Path.Combine(projectDirectory, "Resources", "sub", "icon.png"), ""));
 
         var diagnostics = await AnalyzeProjectAsync(project);
         Assert.Contains(diagnostics, d => d.Id == "RITSU013");
@@ -695,6 +701,7 @@ public sealed class RitsuLibModAnalyzerTests
     [Fact]
     public async Task ResPathDoesNotMatchByFileNameOnly()
     {
+        var projectDirectory = CreateTemporaryProjectDirectory();
         var project = CreateProject(
             Source("""
                 public static void Build()
@@ -702,7 +709,8 @@ public sealed class RitsuLibModAnalyzerTests
                     RitsuLibFramework.LoadIcon("res://icon.svg");
                 }
                 """),
-            AdditionalFile(@"C:\mod\assets\icon.svg", "<svg/>"));
+            projectDirectory,
+            AdditionalFile(Path.Combine(projectDirectory, "assets", "icon.svg"), "<svg/>"));
 
         var diagnostics = await AnalyzeProjectAsync(project);
         Assert.Contains(diagnostics, d => d.Id == "RITSU013");
@@ -1536,6 +1544,12 @@ public sealed class RitsuLibModAnalyzerTests
 
     private static async Task<ImmutableArray<Diagnostic>> AnalyzeProjectAsync(Project project)
     {
+        var projectDirectory = project.FilePath == null ? @"C:\mod" : Path.GetDirectoryName(project.FilePath) ?? @"C:\mod";
+        return await AnalyzeProjectAsync(project, projectDirectory);
+    }
+
+    private static async Task<ImmutableArray<Diagnostic>> AnalyzeProjectAsync(Project project, string projectDirectory)
+    {
         var compilation = await project.GetCompilationAsync();
         Assert.NotNull(compilation);
 
@@ -1547,7 +1561,7 @@ public sealed class RitsuLibModAnalyzerTests
         return await AnalyzeCompilationAsync(
             compilation!,
             additionalTexts,
-            new InMemoryAnalyzerConfigOptionsProvider(@"C:\mod"));
+            new InMemoryAnalyzerConfigOptionsProvider(projectDirectory));
     }
 
     private static async Task<ImmutableArray<Diagnostic>> AnalyzeCompilationAsync(
@@ -1580,18 +1594,24 @@ public sealed class RitsuLibModAnalyzerTests
 
     private static Project CreateProject(string source, params AdditionalFileSpec[] additionalFiles)
     {
+        return CreateProject(source, CreateTemporaryProjectDirectory(), additionalFiles);
+    }
+
+    private static Project CreateProject(string source, string projectDirectory, params AdditionalFileSpec[] additionalFiles)
+    {
         var workspace = new AdhocWorkspace();
         var projectId = ProjectId.CreateNewId();
         var documentId = DocumentId.CreateNewId(projectId);
         var solution = workspace.CurrentSolution
             .AddProject(projectId, "AnalyzerTests", "AnalyzerTests", LanguageNames.CSharp)
+            .WithProjectFilePath(projectId, Path.Combine(projectDirectory, "AnalyzerTests.csproj"))
             .WithProjectParseOptions(projectId, CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview))
             .WithProjectCompilationOptions(projectId, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         foreach (var reference in References())
             solution = solution.AddMetadataReference(projectId, reference);
 
-        solution = solution.AddDocument(documentId, "Test.cs", SourceText.From(source, Encoding.UTF8), filePath: @"C:\mod\Test.cs");
+        solution = solution.AddDocument(documentId, "Test.cs", SourceText.From(source, Encoding.UTF8), filePath: Path.Combine(projectDirectory, "Test.cs"));
 
         foreach (var additionalFile in additionalFiles)
         {
@@ -1663,6 +1683,15 @@ public sealed class RitsuLibModAnalyzerTests
         }
 
         return count;
+    }
+
+    private static string CreateTemporaryProjectDirectory(params string[] languages)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "RitsuLibAnalyzerTests", Guid.NewGuid().ToString("N"));
+        foreach (var language in languages)
+            Directory.CreateDirectory(Path.Combine(directory, "localization", language));
+
+        return directory;
     }
 
     [Fact]
@@ -1798,6 +1827,148 @@ public sealed class RitsuLibModAnalyzerTests
         Assert.Equal("{ invalid", cardsText);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", keywordsText);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", keywordsText);
+    }
+
+    [Fact]
+    public async Task LocalizationDirectoriesWithoutJsonFilesReportMissingKeys()
+    {
+        var projectDirectory = CreateTemporaryProjectDirectory("eng", "zhs");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            projectDirectory);
+
+        var diagnostics = await AnalyzeProjectAsync(project, projectDirectory);
+
+        Assert.Contains(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("eng/cards.json"));
+        Assert.Contains(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("zhs/cards.json"));
+    }
+
+    [Fact]
+    public async Task LocalizationDirectoryLanguageWarnsWhenEngHasKeyButOtherLanguageDoesNot()
+    {
+        var projectDirectory = CreateTemporaryProjectDirectory("eng", "zhs");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            projectDirectory,
+            AdditionalFile(Path.Combine(projectDirectory, "localization", "eng", "cards.json"), """
+            {
+              "MANOSABA_LIN_CARD_MY_CARD.title": "Existing",
+              "MANOSABA_LIN_CARD_MY_CARD.description": "Existing"
+            }
+            """));
+
+        var diagnostics = (await AnalyzeProjectAsync(project, projectDirectory))
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .ToImmutableArray();
+
+        Assert.DoesNotContain(diagnostics, d => d.GetMessage().Contains("eng/cards.json"));
+        var zhsMissing = Assert.Single(diagnostics.Where(d => d.GetMessage().Contains("zhs/cards.json")));
+        Assert.Equal(DiagnosticSeverity.Warning, zhsMissing.Severity);
+        Assert.Contains("MANOSABA_LIN_CARD_MY_CARD.title", zhsMissing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_CARD_MY_CARD.description", zhsMissing.GetMessage());
+    }
+
+    [Fact]
+    public async Task LocalizationDirectoryLanguageSplitsFallbackErrorsFromTranslationWarnings()
+    {
+        var projectDirectory = CreateTemporaryProjectDirectory("eng", "zhs");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            projectDirectory,
+            AdditionalFile(Path.Combine(projectDirectory, "localization", "eng", "cards.json"), """
+            {
+              "MANOSABA_LIN_CARD_MY_CARD.title": "Existing"
+            }
+            """));
+
+        var diagnostics = (await AnalyzeProjectAsync(project, projectDirectory))
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .ToImmutableArray();
+
+        var engMissing = Assert.Single(diagnostics.Where(d => d.GetMessage().Contains("eng/cards.json")));
+        Assert.Equal(DiagnosticSeverity.Error, engMissing.Severity);
+        Assert.Contains("MANOSABA_LIN_CARD_MY_CARD.description", engMissing.GetMessage());
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_MY_CARD.title", engMissing.GetMessage());
+
+        var zhsError = Assert.Single(diagnostics.Where(d =>
+            d.GetMessage().Contains("zhs/cards.json") &&
+            d.Severity == DiagnosticSeverity.Error));
+        Assert.Contains("MANOSABA_LIN_CARD_MY_CARD.description", zhsError.GetMessage());
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_MY_CARD.title", zhsError.GetMessage());
+
+        var zhsWarning = Assert.Single(diagnostics.Where(d =>
+            d.GetMessage().Contains("zhs/cards.json") &&
+            d.Severity == DiagnosticSeverity.Warning));
+        Assert.Contains("MANOSABA_LIN_CARD_MY_CARD.title", zhsWarning.GetMessage());
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_MY_CARD.description", zhsWarning.GetMessage());
+    }
+
+    [Fact]
+    public async Task JsonCodeFixCreatesFilesForLocalizationDirectoryLanguages()
+    {
+        using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory("eng", "zhs");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            projectDirectory);
+
+        var diagnostic = (await AnalyzeProjectAsync(project, projectDirectory))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("eng/cards.json"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+
+        var engPath = Path.Combine(projectDirectory, "localization", "eng", "cards.json");
+        var zhsPath = Path.Combine(projectDirectory, "localization", "zhs", "cards.json");
+        var engText = await GetAdditionalTextAsync(changed, engPath);
+        var zhsText = await GetAdditionalTextAsync(changed, zhsPath);
+
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixPreservesEngExistingKeysAndCreatesOtherLanguageFile()
+    {
+        using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory("eng", "zhs");
+        var engCardsPath = Path.Combine(projectDirectory, "localization", "eng", "cards.json");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            projectDirectory,
+            AdditionalFile(engCardsPath, """
+            {
+              "MANOSABA_LIN_CARD_MY_CARD.title": "Existing"
+            }
+            """));
+
+        var diagnostic = (await AnalyzeProjectAsync(project, projectDirectory))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+
+        var engText = await GetAdditionalTextAsync(changed, engCardsPath);
+        var zhsText = await GetAdditionalTextAsync(changed, Path.Combine(projectDirectory, "localization", "zhs", "cards.json"));
+
+        Assert.Equal(1, CountOccurrences(engText, "\"MANOSABA_LIN_CARD_MY_CARD.title\""));
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"Existing\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
     }
 
     [Fact]

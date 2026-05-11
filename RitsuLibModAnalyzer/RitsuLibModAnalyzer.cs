@@ -64,6 +64,8 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
         Dictionary<string, Dictionary<string, string>> tablePathsByLanguage = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, string> i18NPathsByLanguage = new(StringComparer.OrdinalIgnoreCase);
         List<string> roots = new();
+        HashSet<string> directoryLanguages = new(StringComparer.OrdinalIgnoreCase);
+        AddLocalizationDirectoryLanguages(context.Options, roots, directoryLanguages);
 
         foreach (var file in context.Options.AdditionalFiles)
         {
@@ -121,7 +123,60 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             tablePaths[table] = path;
         }
 
-        return new LocalizationData(tableKeysByLanguage, i18NKeysByLanguage, tablePathsByLanguage, i18NPathsByLanguage, roots);
+        return new LocalizationData(tableKeysByLanguage, i18NKeysByLanguage, tablePathsByLanguage, i18NPathsByLanguage, roots, directoryLanguages);
+    }
+
+    private static void AddLocalizationDirectoryLanguages(
+        AnalyzerOptions options,
+        List<string> roots,
+        HashSet<string> languages)
+    {
+        var projectDirectory = GetBuildProperty(options, "MSBuildProjectDirectory");
+        if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
+            return;
+
+        foreach (var localizationRoot in EnumerateLocalizationRoots(projectDirectory!))
+        {
+            if (!roots.Contains(localizationRoot, StringComparer.OrdinalIgnoreCase))
+                roots.Add(localizationRoot);
+
+            foreach (var languageDirectory in Directory.EnumerateDirectories(localizationRoot))
+            {
+                var language = NormalizeLanguageCode(Path.GetFileName(languageDirectory));
+                if (!string.IsNullOrWhiteSpace(language))
+                    languages.Add(language);
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateLocalizationRoots(string projectDirectory)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(projectDirectory, "localization", SearchOption.AllDirectories))
+        {
+            if (IsIgnoredLocalizationRoot(directory))
+                continue;
+
+            yield return directory;
+        }
+    }
+
+    private static bool IsIgnoredLocalizationRoot(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        return normalized.IndexOf("/bin/", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               normalized.IndexOf("/obj/", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               normalized.IndexOf("/.git/", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               normalized.IndexOf("/.godot/", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               normalized.IndexOf("/.idea/", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               normalized.IndexOf("/.vs/", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static string? GetBuildProperty(AnalyzerOptions options, string name)
+    {
+        return options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue($"build_property.{name}", out var value) &&
+               !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
     }
 
     private static bool TryGetLocalizationPathParts(
@@ -668,9 +723,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 {
                     var isI18N = string.Equals(group.Key, I18NTable, StringComparison.OrdinalIgnoreCase);
                     var missing = group
-                        .Where(key => isI18N
-                            ? !_localization.ContainsI18N(language, key.Key)
-                            : !_localization.ContainsTable(language, key.Table, key.Key))
+                        .Where(key => IsMissingLocalizationKey(language, isI18N, key))
                         .Select(key => key.Key)
                         .Distinct(StringComparer.Ordinal)
                         .OrderBy(key => key, StringComparer.Ordinal)
@@ -682,25 +735,50 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                     var table = isI18N ? string.Empty : group.Key;
                     var targetPath = _localization.GetTargetPath(language, table, isI18N);
                     var displayPath = isI18N ? $"{language}.json" : $"{language}/{table}.json";
-                    var properties = ImmutableDictionary.CreateBuilder<string, string?>(StringComparer.Ordinal);
-                    properties[RitsuLibDiagnosticProperties.Language] = language;
-                    properties[RitsuLibDiagnosticProperties.Table] = table;
-                    properties[RitsuLibDiagnosticProperties.IsI18N] = isI18N ? "true" : "false";
-                    properties[RitsuLibDiagnosticProperties.TargetPath] = targetPath;
-                    properties[RitsuLibDiagnosticProperties.Keys] = string.Join(RitsuLibDiagnosticProperties.ListSeparator, missing);
-                    properties[RitsuLibDiagnosticProperties.Values] = string.Join(RitsuLibDiagnosticProperties.ListSeparator, missing.Select(_ => string.Empty));
+                    foreach (var severityGroup in missing.GroupBy(key => GetMissingLocalizationSeverity(language, isI18N, table, key)))
+                    {
+                        var severityMissing = severityGroup.OrderBy(key => key, StringComparer.Ordinal).ToArray();
+                        var properties = ImmutableDictionary.CreateBuilder<string, string?>(StringComparer.Ordinal);
+                        properties[RitsuLibDiagnosticProperties.Language] = language;
+                        properties[RitsuLibDiagnosticProperties.Table] = table;
+                        properties[RitsuLibDiagnosticProperties.IsI18N] = isI18N ? "true" : "false";
+                        properties[RitsuLibDiagnosticProperties.TargetPath] = targetPath;
+                        properties[RitsuLibDiagnosticProperties.Keys] = string.Join(RitsuLibDiagnosticProperties.ListSeparator, severityMissing);
+                        properties[RitsuLibDiagnosticProperties.Values] = string.Join(RitsuLibDiagnosticProperties.ListSeparator, severityMissing.Select(_ => string.Empty));
 
-                    yield return Diagnostic.Create(
-                        CreateMissingLocalizationRule(),
-                        requirement.Location,
-                        properties.ToImmutable(),
-                        requirement.DisplayName,
-                        requirement.Subject,
-                        missing.Length,
-                        displayPath,
-                        string.Join(", ", missing));
+                        yield return Diagnostic.Create(
+                            CreateMissingLocalizationRule(),
+                            requirement.Location,
+                            severityGroup.Key,
+                            additionalLocations: null,
+                            properties: properties.ToImmutable(),
+                            requirement.DisplayName,
+                            requirement.Subject,
+                            severityMissing.Length,
+                            displayPath,
+                            string.Join(", ", severityMissing));
+                    }
                 }
             }
+        }
+
+        private bool IsMissingLocalizationKey(string language, bool isI18N, RequiredLocalizationKey key)
+        {
+            return isI18N
+                ? !_localization.ContainsI18N(language, key.Key)
+                : !_localization.ContainsTable(language, key.Table, key.Key);
+        }
+
+        private DiagnosticSeverity GetMissingLocalizationSeverity(string language, bool isI18N, string table, string key)
+        {
+            if (string.Equals(RitsuLibAdditionalFileIndex.NormalizeLanguageCode(language), "eng", StringComparison.OrdinalIgnoreCase))
+                return DiagnosticSeverity.Error;
+
+            var fallbackHasKey = isI18N
+                ? _localization.ContainsI18N("eng", key)
+                : _localization.ContainsTable("eng", table, key);
+
+            return fallbackHasKey ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error;
         }
 
         private static ImmutableArray<LocalizationTemplate> CreateOwnedAttributeTemplates(
@@ -1194,7 +1272,8 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             Dictionary<string, HashSet<string>> i18NKeysByLanguage,
             Dictionary<string, Dictionary<string, string>> tablePathsByLanguage,
             Dictionary<string, string> i18NPathsByLanguage,
-            List<string> roots)
+            List<string> roots,
+            HashSet<string> directoryLanguages)
         {
             _tableKeysByLanguage = tableKeysByLanguage;
             _i18NKeysByLanguage = i18NKeysByLanguage;
@@ -1203,6 +1282,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             _roots = roots.OrderBy(root => root, StringComparer.OrdinalIgnoreCase).ToArray();
             Languages = tableKeysByLanguage.Keys
                 .Concat(i18NKeysByLanguage.Keys)
+                .Concat(directoryLanguages)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
