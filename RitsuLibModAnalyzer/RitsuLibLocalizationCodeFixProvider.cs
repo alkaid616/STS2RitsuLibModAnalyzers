@@ -42,9 +42,30 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
-                    RitsuLibUiText.AddMissingKeysTitle(GetTargetLabel(requests)),
-                    cancellationToken => AddMissingKeysForProjectAsync(context.Document.Project, requests, cancellationToken),
+                    RitsuLibUiText.AddMissingKeysToTargetTitle(GetTargetLabel(requests)),
+                    cancellationToken => AddMissingKeysAsync(context.Document.Project.Solution, context.Document.Project.Id, requests, cancellationToken),
                     "AddMissingRitsuLibLocalizationKeys"),
+                context.Diagnostics);
+
+            var tableLabel = GetTableLabel(requests);
+            if (!string.IsNullOrEmpty(tableLabel))
+            {
+                context.RegisterCodeFix(
+                    CodeAction.Create(
+                        RitsuLibUiText.AddMissingKeysToAllLanguagesTitle(tableLabel),
+                        cancellationToken => AddMissingKeysToAllLanguagesForCurrentDiagnosticsAsync(
+                            context.Document.Project,
+                            requests,
+                            cancellationToken),
+                        "AddMissingRitsuLibLocalizationKeysToAllLanguages"),
+                    context.Diagnostics);
+            }
+
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    RitsuLibUiText.FixAllMissingLocalizationTitle,
+                    cancellationToken => AddMissingKeysForProjectAsync(context.Document.Project, requests, cancellationToken),
+                    "FixAllMissingRitsuLibLocalizationKeysInProject"),
                 context.Diagnostics);
         }
 
@@ -642,6 +663,62 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return await AddMissingKeysAsync(project.Solution, project.Id, requests, cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task<Solution> AddMissingKeysToAllLanguagesForCurrentDiagnosticsAsync(
+        Project project,
+        ImmutableArray<LocalizationFixRequest> currentRequests,
+        CancellationToken cancellationToken)
+    {
+        var projectRequests = await CollectProjectRequestsAsync(project, cancellationToken).ConfigureAwait(false);
+        var requests = ExpandCurrentKeysToAllLanguages(projectRequests, currentRequests);
+        if (requests.Length == 0)
+            requests = currentRequests;
+
+        return await AddMissingKeysAsync(project.Solution, project.Id, requests, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static ImmutableArray<LocalizationFixRequest> ExpandCurrentKeysToAllLanguages(
+        ImmutableArray<LocalizationFixRequest> projectRequests,
+        ImmutableArray<LocalizationFixRequest> currentRequests)
+    {
+        var builder = ImmutableArray.CreateBuilder<LocalizationFixRequest>();
+
+        foreach (var currentRequest in currentRequests)
+        {
+            var currentKeys = currentRequest.Entries
+                .Select(entry => entry.Key)
+                .ToImmutableHashSet(StringComparer.Ordinal);
+
+            foreach (var projectRequest in projectRequests)
+            {
+                if (!IsSameLocalizationTable(projectRequest, currentRequest))
+                    continue;
+
+                var filtered = FilterEntries(projectRequest, currentKeys);
+                if (filtered.Length == 0)
+                    continue;
+
+                builder.Add(projectRequest.WithEntries(filtered));
+            }
+        }
+
+        return builder.Distinct().ToImmutableArray();
+    }
+
+    private static bool IsSameLocalizationTable(LocalizationFixRequest left, LocalizationFixRequest right)
+    {
+        return left.IsI18N == right.IsI18N &&
+               string.Equals(left.Table, right.Table, StringComparison.Ordinal);
+    }
+
+    private static ImmutableArray<KeyValuePair<string, string>> FilterEntries(
+        LocalizationFixRequest request,
+        IImmutableSet<string> keys)
+    {
+        return request.Entries
+            .Where(entry => keys.Contains(entry.Key))
+            .ToImmutableArray();
+    }
+
     private static async Task<ImmutableArray<LocalizationFixRequest>> CollectProjectRequestsAsync(
         Project project,
         CancellationToken cancellationToken)
@@ -1030,7 +1107,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 : fixAllContext.Project;
 
             return CodeAction.Create(
-                RitsuLibUiText.AddMissingKeysTitle(GetTargetLabel(requestsArray)),
+                RitsuLibUiText.FixAllMissingLocalizationTitle,
                 _ => AddMissingKeysAsync(
                     targetProject.Solution, targetProject.Id, requestsArray, CancellationToken.None),
                 "FixAllRitsuLibLocalizationKeys");
@@ -1073,6 +1150,11 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         public string Table { get; }
         public bool IsI18N { get; }
         public ImmutableArray<KeyValuePair<string, string>> Entries { get; }
+
+        public LocalizationFixRequest WithEntries(ImmutableArray<KeyValuePair<string, string>> entries)
+        {
+            return new LocalizationFixRequest(TargetPath, Language, Table, IsI18N, entries);
+        }
     }
 
     private sealed class AdditionalDocumentText : AdditionalText
@@ -1140,11 +1222,35 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
     private static string GetTargetLabel(ImmutableArray<LocalizationFixRequest> requests)
     {
         var distinct = requests
-            .Select(request => request.TargetPath)
+            .Select(GetTargetLabel)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return distinct.Length == 1
-            ? Path.GetFileName(distinct[0])
-            : $"{distinct.Length} files";
+        return distinct.Length == 1 ? distinct[0] : $"{distinct.Length} files";
+    }
+
+    private static string GetTargetLabel(LocalizationFixRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.Language) &&
+            !string.IsNullOrWhiteSpace(request.Table))
+            return request.Language + "/" + GetTableFileName(request.Table, request.IsI18N);
+
+        return Path.GetFileName(request.TargetPath);
+    }
+
+    private static string GetTableLabel(ImmutableArray<LocalizationFixRequest> requests)
+    {
+        var distinct = requests
+            .Select(request => string.IsNullOrWhiteSpace(request.Table)
+                ? Path.GetFileName(request.TargetPath)
+                : GetTableFileName(request.Table, request.IsI18N))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return distinct.Length == 1 ? distinct[0] : string.Empty;
+    }
+
+    private static string GetTableFileName(string table, bool isI18N)
+    {
+        return isI18N ? table : table + ".json";
     }
 }

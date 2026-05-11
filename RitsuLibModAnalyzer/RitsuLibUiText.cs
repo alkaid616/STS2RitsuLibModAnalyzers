@@ -202,12 +202,22 @@ internal static class RitsuLibUiText
             ? "RitsuLib 文档要求新 mod 不再覆写 TypeList*PoolModel 的旧式集合属性。"
             : "RitsuLib docs ask new mods to avoid overriding legacy TypeList*PoolModel collection properties.";
 
-    public static string AddMissingKeysTitle(string targetLabel)
+    public static string AddMissingKeysToTargetTitle(string targetLabel)
     {
         return IsChinese
-            ? $"添加缺失的本地化键到 {targetLabel}"
-            : $"Add missing localization keys to {targetLabel}";
+            ? $"添加缺失的本地化到 {targetLabel}"
+            : $"Add missing localization to {targetLabel}";
     }
+
+    public static string AddMissingKeysToAllLanguagesTitle(string targetLabel)
+    {
+        return IsChinese
+            ? $"添加缺失的本地化到 */{targetLabel}"
+            : $"Add missing localization to */{targetLabel}";
+    }
+
+    public static string FixAllMissingLocalizationTitle =>
+        IsChinese ? "修复所有本地化缺失问题" : "Fix all missing localization issues";
 
     public static string InsertSnippetTitle =>
         IsChinese ? "插入本地化 JSON 片段" : "Insert localization JSON snippet";

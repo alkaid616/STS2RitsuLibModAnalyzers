@@ -375,7 +375,7 @@ public sealed class RitsuLibModAnalyzerTests
             """));
 
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/card_keywords.json");
         var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
 
         Assert.Contains("\"EXISTING\": \"ok\"", text);
@@ -397,7 +397,7 @@ public sealed class RitsuLibModAnalyzerTests
             AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"));
 
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/static_hover_tips.json");
         var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\static_hover_tips.json");
 
         Assert.Contains("\"MANOSABA_LIN_CARDPILE_TEST_PILE.title\": \"\"", text);
@@ -417,7 +417,7 @@ public sealed class RitsuLibModAnalyzerTests
             AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "   "));
 
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/card_keywords.json");
         var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
 
         Assert.StartsWith("{", text.TrimStart(), StringComparison.Ordinal);
@@ -460,7 +460,9 @@ public sealed class RitsuLibModAnalyzerTests
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
         var actions = await GetCodeActionsAsync(project, diagnostic);
 
-        Assert.Contains(actions, action => action.Title == "添加缺失的本地化键到 card_keywords.json");
+        Assert.Contains(actions, action => action.Title == "添加缺失的本地化到 eng/card_keywords.json");
+        Assert.Contains(actions, action => action.Title == "添加缺失的本地化到 */card_keywords.json");
+        Assert.Contains(actions, action => action.Title == "修复所有本地化缺失问题");
         Assert.Contains(actions, action => action.Title == "插入本地化 JSON 片段");
     }
 
@@ -478,7 +480,9 @@ public sealed class RitsuLibModAnalyzerTests
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
         var actions = await GetCodeActionsAsync(project, diagnostic);
 
-        Assert.Contains(actions, action => action.Title == "Add missing localization keys to card_keywords.json");
+        Assert.Contains(actions, action => action.Title == "Add missing localization to eng/card_keywords.json");
+        Assert.Contains(actions, action => action.Title == "Add missing localization to */card_keywords.json");
+        Assert.Contains(actions, action => action.Title == "Fix all missing localization issues");
         Assert.Contains(actions, action => action.Title == "Insert localization JSON snippet");
     }
 
@@ -1637,7 +1641,8 @@ public sealed class RitsuLibModAnalyzerTests
     private static async Task<Solution> ApplyCodeFixAsync(Project project, Diagnostic diagnostic, string titlePrefix)
     {
         var actions = await GetCodeActionsAsync(project, diagnostic);
-        var action = Assert.Single(actions, action => action.Title.StartsWith(titlePrefix, StringComparison.Ordinal));
+        var exactAction = actions.SingleOrDefault(action => string.Equals(action.Title, titlePrefix, StringComparison.Ordinal));
+        var action = exactAction ?? Assert.Single(actions, action => action.Title.StartsWith(titlePrefix, StringComparison.Ordinal));
         var operations = await action.GetOperationsAsync(CancellationToken.None);
         var applyChanges = Assert.Single(operations.OfType<ApplyChangesOperation>());
         return applyChanges.ChangedSolution;
@@ -1713,12 +1718,15 @@ public sealed class RitsuLibModAnalyzerTests
         Assert.True(diagnostics.Length >= 2);
 
         var engDiagnostic = diagnostics.First(d => d.GetMessage().Contains("eng/"));
-        var changed = await ApplyCodeFixAsync(project, engDiagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, engDiagnostic, "Add missing localization to eng/cards.json");
 
         var engText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+        var zhsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\zhs\cards.json");
 
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", engText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
+        Assert.DoesNotContain("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
+        Assert.DoesNotContain("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
     }
 
     [Fact]
@@ -1735,7 +1743,7 @@ public sealed class RitsuLibModAnalyzerTests
 
         var diagnostic = (await AnalyzeProjectAsync(project))
             .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("eng/"));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to */cards.json");
 
         var engText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
         var zhsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\zhs\cards.json");
@@ -1747,7 +1755,7 @@ public sealed class RitsuLibModAnalyzerTests
     }
 
     [Fact]
-    public async Task JsonCodeFixAddsKeysToMultipleTargetFilesFromSingleDiagnostic()
+    public async Task JsonCodeFixFixesAllMissingLocalizationProblems()
     {
         using var culture = UseCulture("en-US");
         var project = CreateProject(
@@ -1765,7 +1773,7 @@ public sealed class RitsuLibModAnalyzerTests
 
         var diagnostic = (await AnalyzeProjectAsync(project))
             .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("cards.json"));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Fix all missing localization issues");
 
         var cardsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
         var keywordsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
@@ -1774,6 +1782,44 @@ public sealed class RitsuLibModAnalyzerTests
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", cardsText);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", keywordsText);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", keywordsText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixAllLanguagesSameTableDoesNotFixOtherTables()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void Register()
+                {
+                    ModKeywordRegistry.For(MainFile.ModId).RegisterOwned("hiro");
+                }
+
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\zhs\cards.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\zhs\card_keywords.json", "{}"));
+
+        var diagnostic = (await AnalyzeProjectAsync(project))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("eng/cards.json"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to */cards.json");
+
+        var engCardsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+        var zhsCardsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\zhs\cards.json");
+        var engKeywordsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+        var zhsKeywordsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\zhs\card_keywords.json");
+
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", engCardsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engCardsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsCardsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsCardsText);
+        Assert.DoesNotContain("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", engKeywordsText);
+        Assert.DoesNotContain("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", engKeywordsText);
+        Assert.DoesNotContain("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", zhsKeywordsText);
+        Assert.DoesNotContain("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", zhsKeywordsText);
     }
 
     [Fact]
@@ -1792,7 +1838,7 @@ public sealed class RitsuLibModAnalyzerTests
             """));
 
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/cards.json");
         var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
 
         Assert.Equal(1, CountOccurrences(text, "\"MANOSABA_LIN_CARD_MY_CARD.title\""));
@@ -1819,7 +1865,7 @@ public sealed class RitsuLibModAnalyzerTests
 
         var diagnostic = (await AnalyzeProjectAsync(project))
             .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("card_keywords.json"));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Fix all missing localization issues");
 
         var cardsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
         var keywordsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
@@ -1926,7 +1972,7 @@ public sealed class RitsuLibModAnalyzerTests
 
         var diagnostic = (await AnalyzeProjectAsync(project, projectDirectory))
             .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("eng/cards.json"));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Fix all missing localization issues");
 
         var engPath = Path.Combine(projectDirectory, "localization", "eng", "cards.json");
         var zhsPath = Path.Combine(projectDirectory, "localization", "zhs", "cards.json");
@@ -1959,7 +2005,7 @@ public sealed class RitsuLibModAnalyzerTests
 
         var diagnostic = (await AnalyzeProjectAsync(project, projectDirectory))
             .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Fix all missing localization issues");
 
         var engText = await GetAdditionalTextAsync(changed, engCardsPath);
         var zhsText = await GetAdditionalTextAsync(changed, Path.Combine(projectDirectory, "localization", "zhs", "cards.json"));
@@ -2009,7 +2055,7 @@ public sealed class RitsuLibModAnalyzerTests
 
         var fixAllAction = await fixAllProvider.GetFixAsync(fixAllContext);
         Assert.NotNull(fixAllAction);
-        Assert.Contains("2 files", fixAllAction.Title);
+        Assert.Equal("Fix all missing localization issues", fixAllAction.Title);
     }
 
     private sealed class FixAllDiagnosticProvider : FixAllContext.DiagnosticProvider
