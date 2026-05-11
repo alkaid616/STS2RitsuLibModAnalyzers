@@ -483,7 +483,7 @@ public sealed class RitsuLibModAnalyzerTests
     }
 
     [Fact]
-    public async Task InvalidJsonOnlyOffersSnippetFix()
+    public async Task InvalidJsonStillOffersJsonAndSnippetFixes()
     {
         using var culture = UseCulture("en-US");
         var project = CreateProject(
@@ -496,7 +496,7 @@ public sealed class RitsuLibModAnalyzerTests
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
         var actions = await GetCodeActionsAsync(project, diagnostic);
 
-        Assert.DoesNotContain(actions, action => action.Title.StartsWith("Add missing", StringComparison.Ordinal));
+        Assert.Contains(actions, action => action.Title.StartsWith("Add missing", StringComparison.Ordinal));
         Assert.Contains(actions, action => action.Title.StartsWith("Insert localization", StringComparison.Ordinal));
     }
 
@@ -1652,6 +1652,19 @@ public sealed class RitsuLibModAnalyzerTests
         return (await document.GetTextAsync()).ToString();
     }
 
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
     [Fact]
     public async Task JsonCodeFixAddsKeysToTargetLanguageFile()
     {
@@ -1677,6 +1690,114 @@ public sealed class RitsuLibModAnalyzerTests
 
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", engText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixAddsKeysToAllLanguagesFromSingleDiagnostic()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\zhs\cards.json", "{}"));
+
+        var diagnostic = (await AnalyzeProjectAsync(project))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("eng/"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+
+        var engText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+        var zhsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\zhs\cards.json");
+
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixAddsKeysToMultipleTargetFilesFromSingleDiagnostic()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void Register()
+                {
+                    ModKeywordRegistry.For(MainFile.ModId).RegisterOwned("hiro");
+                }
+
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "{}"));
+
+        var diagnostic = (await AnalyzeProjectAsync(project))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("cards.json"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+
+        var cardsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+        var keywordsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", cardsText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", cardsText);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", keywordsText);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", keywordsText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixSkipsExistingKeysWhenAddingMissingKeys()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", """
+            {
+              "MANOSABA_LIN_CARD_MY_CARD.title": "Existing"
+            }
+            """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+
+        Assert.Equal(1, CountOccurrences(text, "\"MANOSABA_LIN_CARD_MY_CARD.title\""));
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"Existing\"", text);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", text);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixSkipsInvalidJsonButUpdatesOtherTargets()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void Register()
+                {
+                    ModKeywordRegistry.For(MainFile.ModId).RegisterOwned("hiro");
+                }
+
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{ invalid"),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "{}"));
+
+        var diagnostic = (await AnalyzeProjectAsync(project))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("card_keywords.json"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing");
+
+        var cardsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+        var keywordsText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+
+        Assert.Equal("{ invalid", cardsText);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", keywordsText);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", keywordsText);
     }
 
     [Fact]

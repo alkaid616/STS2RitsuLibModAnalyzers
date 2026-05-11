@@ -12,6 +12,7 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Text;
 
@@ -37,13 +38,12 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             .Cast<LocalizationFixRequest>()
             .ToImmutableArray();
 
-        if (requests.Length > 0 &&
-            await CanApplyJsonFixAsync(context.Document.Project, requests, context.CancellationToken).ConfigureAwait(false))
+        if (requests.Length > 0)
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
                     RitsuLibUiText.AddMissingKeysTitle(GetTargetLabel(requests)),
-                    cancellationToken => AddMissingKeysAsync(context.Document.Project.Solution, context.Document.Project.Id, requests, cancellationToken),
+                    cancellationToken => AddMissingKeysForProjectAsync(context.Document.Project, requests, cancellationToken),
                     "AddMissingRitsuLibLocalizationKeys"),
                 context.Diagnostics);
         }
@@ -629,6 +629,53 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             : value.Split(new[] { RitsuLibDiagnosticProperties.ListSeparator }, StringSplitOptions.None);
     }
 
+    private static async Task<Solution> AddMissingKeysForProjectAsync(
+        Project project,
+        ImmutableArray<LocalizationFixRequest> fallbackRequests,
+        CancellationToken cancellationToken)
+    {
+        var projectRequests = await CollectProjectRequestsAsync(project, cancellationToken).ConfigureAwait(false);
+        var requests = projectRequests
+            .Concat(fallbackRequests)
+            .ToImmutableArray();
+
+        return await AddMissingKeysAsync(project.Solution, project.Id, requests, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<ImmutableArray<LocalizationFixRequest>> CollectProjectRequestsAsync(
+        Project project,
+        CancellationToken cancellationToken)
+    {
+        var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+        if (compilation == null)
+            return ImmutableArray<LocalizationFixRequest>.Empty;
+
+        var additionalTexts = project.AdditionalDocuments
+            .Select(document => new AdditionalDocumentText(document))
+            .Cast<AdditionalText>()
+            .ToImmutableArray();
+
+        var analyzer = new RitsuLibModAnalyzer();
+        var options = new AnalyzerOptions(additionalTexts);
+        var compilationWithAnalyzers = compilation.WithAnalyzers(
+            ImmutableArray.Create<DiagnosticAnalyzer>(analyzer),
+            new CompilationWithAnalyzersOptions(
+                options,
+                onAnalyzerException: null,
+                concurrentAnalysis: true,
+                logAnalyzerExecutionTime: false,
+                reportSuppressedDiagnostics: false));
+
+        var diagnostics = await compilationWithAnalyzers.GetAnalyzerDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
+        return diagnostics
+            .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
+            .Select(ReadRequest)
+            .Where(request => request != null)
+            .Cast<LocalizationFixRequest>()
+            .Distinct()
+            .ToImmutableArray();
+    }
+
     private static async Task<bool> CanApplyJsonFixAsync(
         Project project,
         ImmutableArray<LocalizationFixRequest> requests,
@@ -668,21 +715,40 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             var targetPath = group.Key;
             var document = FindAdditionalDocument(project, targetPath);
             var existingText = document == null
-                ? string.Empty
+                ? ReadLocalizationFile(targetPath, project) ?? string.Empty
                 : (await document.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString();
-
-            if (string.IsNullOrWhiteSpace(existingText))
-                existingText = ReadLocalizationFile(targetPath, project) ?? string.Empty;
 
             if (!CanPatchTopLevelObject(existingText))
                 continue;
 
+            var existingKeys = RitsuLibAdditionalFileIndex.JsonTopLevelKeyScanner.ReadKeys(existingText);
             var entries = group
                 .SelectMany(request => request.Entries)
                 .GroupBy(entry => entry.Key, StringComparer.Ordinal)
                 .Select(entry => entry.First())
+                .Where(entry => !existingKeys.Contains(entry.Key))
                 .OrderBy(entry => entry.Key, StringComparer.Ordinal)
                 .ToImmutableArray();
+
+            if (entries.Length == 0)
+            {
+                if (document == null && !string.IsNullOrEmpty(existingText))
+                {
+                    var existingDocumentId = DocumentId.CreateNewId(projectId, Path.GetFileName(targetPath));
+                    solution = solution.AddAdditionalDocument(
+                        existingDocumentId,
+                        Path.GetFileName(targetPath),
+                        SourceText.From(existingText, Encoding.UTF8),
+                        folders: ImmutableArray<string>.Empty,
+                        filePath: targetPath);
+
+                    project = solution.GetProject(projectId);
+                    if (project == null)
+                        return solution;
+                }
+
+                continue;
+            }
 
             var updatedContent = AddEntriesToJsonObject(existingText, entries);
             var updatedText = SourceText.From(updatedContent, Encoding.UTF8);
@@ -999,6 +1065,24 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         public string Table { get; }
         public bool IsI18N { get; }
         public ImmutableArray<KeyValuePair<string, string>> Entries { get; }
+    }
+
+    private sealed class AdditionalDocumentText : AdditionalText
+    {
+        private readonly TextDocument _document;
+
+        public AdditionalDocumentText(TextDocument document)
+        {
+            _document = document;
+            Path = document.FilePath ?? document.Name;
+        }
+
+        public override string Path { get; }
+
+        public override SourceText GetText(CancellationToken cancellationToken = default)
+        {
+            return _document.GetTextAsync(cancellationToken).GetAwaiter().GetResult();
+        }
     }
 
     private static string GetTargetLabel(ImmutableArray<LocalizationFixRequest> requests)
