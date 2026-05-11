@@ -9,10 +9,10 @@ RitsuLib mod analyzer for Slay the Spire 2 mods.
 Install the analyzer package in your mod project:
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.2.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.3.0" PrivateAssets="all" />
 ```
 
-Expose localization JSON files as analyzer additional files:
+The package collects common files automatically through `buildTransitive`. If automatic collection is disabled, expose localization JSON files as analyzer additional files:
 
 ```xml
 <AdditionalFiles Include="MyMod/localization/**/*.json" />
@@ -30,12 +30,13 @@ localization/zhs.json
 
 `localization/{lang}/{table}.json` is treated as a game LocString table.
 `localization/{lang}.json` is treated as a RitsuLib `I18N` file.
+Languages are discovered from `localization/<language>` directories; an empty language directory still participates in RITSU001 checks.
 
 ## Diagnostics
 
 | ID | Severity | Description |
 | --- | --- | --- |
-| `RITSU001` | Error | Missing RitsuLib localization keys in discovered language JSON files. |
+| `RITSU001` | Error / Warning | Missing RitsuLib localization keys; missing `eng` fallback keys are errors, while other languages are warnings when `eng` already has that key. |
 | `RITSU002` | Warning | `mod_manifest.json` is missing the `STS2-RitsuLib` dependency. |
 | `RITSU003` | Error | Code uses a mod id that does not match the manifest. |
 | `RITSU004` | Error | Auto-registration attributes are used without `ModTypeDiscoveryHub.RegisterModAssembly`. |
@@ -69,6 +70,8 @@ localization/zhs.json
 - constant keys passed to `I18N.Get`, `I18N.TryGet`, and `I18N.ContainsKey`
 - Ancient dialogue keys
 
+`RITSU001` computes severity per key: missing `eng` keys are errors; missing non-`eng` keys are errors when `eng` is also missing the key, and warnings when `eng` already has it. Mixed errors and warnings in the same JSON are reported as separate diagnostics.
+
 ## Automatic AdditionalFiles
 
 The package uses `buildTransitive` to feed these files to the analyzer by default:
@@ -96,7 +99,9 @@ press `Alt+Enter`.
 
 Available fixes:
 
-- `Add missing localization keys to ...` (RITSU001) — appends missing keys with empty values; creates the file if it does not exist.
+- `Add missing localization to <language>/<table>.json` (RITSU001) — appends only the current diagnostic's missing keys to the current target JSON; creates the file if it does not exist.
+- `Add missing localization to */<table>.json` (RITSU001) — appends the current diagnostic's keys to the same table for every language.
+- `Fix all missing localization issues` (RITSU001) — collects every RITSU001 in the current project and creates or updates every target JSON.
 - `Insert localization JSON snippet` (RITSU001) — inserts a comment-form JSON near the diagnostic location for manual copy/paste.
 - `Insert RegisterModAssembly boilerplate` (RITSU004)
 - `Insert EnsureGodotScriptsRegistered boilerplate` (RITSU005)
@@ -133,7 +138,7 @@ The default install path is `%USERPROFILE%\.nuget\packages`, and `NUGET_PACKAGES
 Manual publish command for nuget.org:
 
 ```powershell
-dotnet nuget push C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\bin\Release\Nothing.STS2RitsuLib.ModAnalyzers.0.2.0.nupkg --api-key <your NuGet API key> --source https://api.nuget.org/v3/index.json
+dotnet nuget push C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\bin\Release\Nothing.STS2RitsuLib.ModAnalyzers.0.3.0.nupkg --api-key <your NuGet API key> --source https://api.nuget.org/v3/index.json
 ```
 
 The package does not infer translated text. Generated values are empty strings.

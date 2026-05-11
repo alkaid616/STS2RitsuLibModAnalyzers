@@ -9,10 +9,10 @@
 在 mod 项目中引用 analyzer 包：
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.2.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.3.0" PrivateAssets="all" />
 ```
 
-把本地化 JSON 暴露给 analyzer：
+包会通过 `buildTransitive` 自动收集常见文件。如果你关闭了自动收集，也可以手动把本地化 JSON 暴露给 analyzer：
 
 ```xml
 <AdditionalFiles Include="MyMod/localization/**/*.json" />
@@ -30,12 +30,13 @@ localization/zhs.json
 
 `localization/{lang}/{table}.json` 会被当作游戏 LocString 表。
 `localization/{lang}.json` 会被当作 RitsuLib `I18N` 文件。
+语言集合会从 `localization/<language>` 目录识别；即使某个语言目录没有 JSON 文件，也会参与 RITSU001 检查。
 
 ## 诊断
 
 | ID | 严重级别 | 说明 |
 | --- | --- | --- |
-| `RITSU001` | Error | 已发现语言的 JSON 文件中缺少 RitsuLib 本地化键。 |
+| `RITSU001` | Error / Warning | 已发现语言的 JSON 文件中缺少 RitsuLib 本地化键；`eng` fallback 缺失为 Error，其他语言在 `eng` 已有该 key 时为 Warning。 |
 | `RITSU002` | Warning | `mod_manifest.json` 缺少 `STS2-RitsuLib` 依赖。 |
 | `RITSU003` | Error | 代码里使用的 mod id 与 manifest 不一致。 |
 | `RITSU004` | Error | 自动注册属性存在，但没有调用 `ModTypeDiscoveryHub.RegisterModAssembly`。 |
@@ -69,6 +70,8 @@ localization/zhs.json
 - 传给 `I18N.Get`、`I18N.TryGet`、`I18N.ContainsKey` 的常量 key
 - Ancient 对话键
 
+`RITSU001` 按 key 单独判断严重级别：`eng` 缺失为 Error；非 `eng` 语言缺失且 `eng` 也缺失为 Error；非 `eng` 语言缺失但 `eng` 已存在为 Warning。同一 JSON 内混合 Error / Warning 时会拆成多条诊断。
+
 ## 自动 AdditionalFiles
 
 这个包会通过 `buildTransitive` 默认把以下文件送进 analyzer：
@@ -95,7 +98,9 @@ Rider 可以加载 NuGet 包中的 Roslyn analyzer 和 code fix。启用 Roslyn 
 
 可用修复：
 
-- `添加缺失的本地化键到 ...`（RITSU001）— 追加缺失 key，值为 `""`；目标文件不存在时自动创建。
+- `添加缺失的本地化到 <language>/<table>.json`（RITSU001）— 只追加当前诊断对应 JSON 的缺失 key，值为 `""`；目标文件不存在时自动创建。
+- `添加缺失的本地化到 */<table>.json`（RITSU001）— 把当前诊断携带的 key 追加到所有语言的同名表 JSON。
+- `修复所有本地化缺失问题`（RITSU001）— 收集当前项目所有 RITSU001，并一次性创建/更新所有语言、所有目标 JSON。
 - `插入本地化 JSON 片段`（RITSU001）— 在诊断位置附近插入注释形式的 JSON，方便手动复制。
 - `插入 RegisterModAssembly 样板`（RITSU004）
 - `插入 EnsureGodotScriptsRegistered 样板`（RITSU005）
@@ -132,7 +137,7 @@ dotnet msbuild C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnaly
 手动发布到 nuget.org：
 
 ```powershell
-dotnet nuget push C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\bin\Release\Nothing.STS2RitsuLib.ModAnalyzers.0.2.0.nupkg --api-key <你的 NuGet API Key> --source https://api.nuget.org/v3/index.json
+dotnet nuget push C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\bin\Release\Nothing.STS2RitsuLib.ModAnalyzers.0.3.0.nupkg --api-key <你的 NuGet API Key> --source https://api.nuget.org/v3/index.json
 ```
 
 本包不会推断翻译文本。自动生成的值均为空字符串。
