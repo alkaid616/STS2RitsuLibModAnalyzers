@@ -13,11 +13,10 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace Nothing.STS2RitsuLib.ModAnalyzers;
 
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
-public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
+public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 {
-    public const string MissingLocalizationId = "RITSU001";
+    public const string MissingLocalizationId = RitsuLibDiagnostics.MissingLocalizationId;
 
-    private const string Category = "RitsuLib";
     private const string I18NTable = "__ritsulib_i18n__";
 
     private static readonly Regex NonAlphaNumericRegex = new("[^A-Za-z0-9]+", RegexOptions.Compiled);
@@ -26,18 +25,11 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
     private static readonly Regex RepeatedUnderscoreRegex = new("_+", RegexOptions.Compiled);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
-        ImmutableArray.Create(CreateMissingLocalizationRule());
+        RitsuLibDiagnostics.CreateSupported();
 
     private static DiagnosticDescriptor CreateMissingLocalizationRule()
     {
-        return new DiagnosticDescriptor(
-            MissingLocalizationId,
-            RitsuLibUiText.MissingLocalizationTitle,
-            RitsuLibUiText.MissingLocalizationMessageFormat,
-            Category,
-            DiagnosticSeverity.Error,
-            isEnabledByDefault: true,
-            description: RitsuLibUiText.MissingLocalizationDescription);
+        return RitsuLibDiagnostics.MissingLocalizationRule;
     }
 
     public override void Initialize(AnalysisContext context)
@@ -50,10 +42,18 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
     private static void StartCompilation(CompilationStartAnalysisContext context)
     {
-        var state = new CompilationState(ReadLocalization(context), CompilationState.ReadFallbackOwner(context));
+        var additionalFiles = RitsuLibAdditionalFileIndex.Create(context);
+        var state = new CompilationState(
+            ReadLocalization(context),
+            additionalFiles,
+            CompilationState.ReadFallbackOwner(context));
 
         context.RegisterSyntaxNodeAction(state.AnalyzeAttribute, SyntaxKind.Attribute);
         context.RegisterSyntaxNodeAction(state.AnalyzeInvocation, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(state.AnalyzeObjectCreation, SyntaxKind.ObjectCreationExpression, SyntaxKind.ImplicitObjectCreationExpression);
+        context.RegisterSyntaxNodeAction(state.AnalyzeTypeDeclaration, SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.RecordDeclaration);
+        context.RegisterSyntaxNodeAction(state.AnalyzePropertyDeclaration, SyntaxKind.PropertyDeclaration);
+        context.RegisterSyntaxNodeAction(state.AnalyzeMethodDeclaration, SyntaxKind.MethodDeclaration);
         context.RegisterCompilationEndAction(state.ReportCompilationEnd);
     }
 
@@ -219,19 +219,36 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
         };
     }
 
-    private sealed class CompilationState
+    private sealed partial class CompilationState
     {
         private readonly LocalizationData _localization;
+        private readonly RitsuLibAdditionalFileIndex _additionalFiles;
         private readonly string? _fallbackOwner;
         private readonly object _gate = new();
         private readonly List<LocalizationRequirement> _requirements = new();
         private readonly List<OwnedModel> _characters = new();
         private readonly List<OwnedModel> _ancients = new();
+        private readonly List<RitsuDiagnostic> _deferredDiagnostics = new();
+        private readonly List<RegisteredPublicEntry> _publicEntries = new();
+        private readonly List<ContentPackChain> _contentPackChains = new();
+        private readonly List<SettingsPageRegistration> _settingsPages = new();
+        private readonly Dictionary<string, HashSet<string>> _settingsSectionsByPage = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<SettingsEntryRegistration>> _settingsEntriesByPageSection = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _settingsProviderTypes = new(StringComparer.Ordinal);
         private readonly HashSet<string> _assemblyModIds = new(StringComparer.OrdinalIgnoreCase);
+        private bool _usesRitsuLib;
+        private bool _usesAutoRegistration;
+        private bool _usesGodotScriptType;
+        private bool _callsRegisterModAssembly;
+        private bool _callsEnsureGodotScriptsRegistered;
 
-        public CompilationState(LocalizationData localization, string? fallbackOwner)
+        public CompilationState(
+            LocalizationData localization,
+            RitsuLibAdditionalFileIndex additionalFiles,
+            string? fallbackOwner)
         {
             _localization = localization;
+            _additionalFiles = additionalFiles;
             _fallbackOwner = fallbackOwner;
             if (!string.IsNullOrWhiteSpace(fallbackOwner))
                 _assemblyModIds.Add(fallbackOwner!);
@@ -272,8 +289,10 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
             if (attributeName == null)
                 return;
 
+            AnalyzeContractAttribute(attributeName, attribute, context);
             AnalyzeOwnedRegistrationAttribute(attributeName, attribute, context);
             AnalyzeContentRegistrationAttribute(attributeName, attribute, context);
+            AnalyzeInteropAttribute(attributeName, attribute, context);
         }
 
         public void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
@@ -289,13 +308,30 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 var modId = GetInvocationStringArgument(invocation, method, "modId", 0, context.SemanticModel, context.CancellationToken);
                 if (!string.IsNullOrWhiteSpace(modId))
                     AddAssemblyModId(modId!);
+                MarkRegisterModAssembly(invocation, modId, context);
                 return;
             }
 
+            if (IsEnsureGodotScriptsRegistered(methodName, method))
+            {
+                MarkEnsureGodotScriptsRegistered(invocation, context);
+                return;
+            }
+
+            AnalyzeContractInvocation(invocation, method, methodName, context);
             AnalyzeOwnedRegistrationInvocation(invocation, method, methodName, context);
             AnalyzeContentRegistrationInvocation(invocation, method, methodName, context);
             AnalyzeI18NInvocation(invocation, method, methodName, context);
+            AnalyzeSettingsLocalizationInvocation(invocation, method, methodName, context);
             AnalyzeAncientDialogueInvocation(invocation, method, methodName, context);
+            AnalyzeSettingsInvocation(invocation, method, methodName, context);
+            AnalyzeDataStoreInvocation(invocation, method, methodName, context);
+            AnalyzePatchInvocation(invocation, method, methodName, context);
+            AnalyzeResourceInvocation(invocation, method, methodName, context);
+            AnalyzeRuntimeHelperInvocation(invocation, method, methodName, context);
+            AnalyzeDisposableInvocation(invocation, method, methodName, context);
+            AnalyzeAudioSourceInvocation(invocation, method, methodName, context);
+            AnalyzeLifecycleTypeConstraint(invocation, method, methodName, context);
         }
 
         public void ReportCompilationEnd(CompilationAnalysisContext context)
@@ -341,6 +377,8 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
                     ReportMissingLocalization(context, requirement);
                 }
             }
+
+            ReportContractCompilationEnd(context, fallbackOwner, assemblyModIds);
         }
 
         private void AnalyzeOwnedRegistrationAttribute(
@@ -490,6 +528,42 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 ImmutableArray.Create(key!)));
         }
 
+        private void AnalyzeSettingsLocalizationInvocation(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol? method,
+            string methodName,
+            SyntaxNodeAnalysisContext context)
+        {
+            if (methodName == "I18N" && method?.ContainingType?.Name == "ModSettingsText")
+            {
+                var key = GetInvocationStringArgument(invocation, method, "key", 1, context.SemanticModel, context.CancellationToken);
+                if (string.IsNullOrWhiteSpace(key))
+                    return;
+
+                AddRequirement(context, LocalizationRequirement.I18N(
+                    "ModSettings text",
+                    key!,
+                    invocation.GetLocation(),
+                    ImmutableArray.Create(key!)));
+                return;
+            }
+
+            if (methodName != "LocString" || method?.ContainingType?.Name != "ModSettingsText")
+                return;
+
+            var table = GetInvocationStringArgument(invocation, method, "table", 0, context.SemanticModel, context.CancellationToken);
+            var key2 = GetInvocationStringArgument(invocation, method, "key", 1, context.SemanticModel, context.CancellationToken);
+            if (string.IsNullOrWhiteSpace(table) || string.IsNullOrWhiteSpace(key2))
+                return;
+
+            AddRequirement(context, LocalizationRequirement.Table(
+                "ModSettings text",
+                key2!,
+                invocation.GetLocation(),
+                table!,
+                ImmutableArray.Create(key2!)));
+        }
+
         private void AnalyzeAncientDialogueInvocation(
             InvocationExpressionSyntax invocation,
             IMethodSymbol? method,
@@ -563,6 +637,7 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             var model = new OwnedModel(info.DisplayName, info.CategoryStem, typeName, publicEntryOverride, ownerModId, location);
             AddRequirement(context, new ModelLocalizationRequirement(model, info.Templates));
+            AddPublicEntry(info, typeName, publicEntryOverride, ownerModId, location);
 
             if (info.CategoryStem == "CHARACTER")
                 AddCharacter(model);
@@ -740,8 +815,17 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 "RegisterMonsterAttribute" => ContentRegistrationInfo.Monster(),
                 "RegisterPowerAttribute" => ContentRegistrationInfo.Power(),
                 "RegisterOrbAttribute" => ContentRegistrationInfo.Orb(),
+                "RegisterEnchantmentAttribute" => ContentRegistrationInfo.Enchantment(),
+                "RegisterAfflictionAttribute" => ContentRegistrationInfo.Affliction(),
+                "RegisterAchievementAttribute" => ContentRegistrationInfo.Achievement(),
+                "RegisterSharedEventAttribute" => ContentRegistrationInfo.Event(),
+                "RegisterGlobalEncounterAttribute" => ContentRegistrationInfo.Encounter(),
                 "RegisterSharedAncientAttribute" => ContentRegistrationInfo.Ancient(),
                 "RegisterActAncientAttribute" => ContentRegistrationInfo.Ancient(),
+                "RegisterActEventAttribute" => ContentRegistrationInfo.Event(),
+                "RegisterActEncounterAttribute" => ContentRegistrationInfo.Encounter(),
+                "RegisterEpochAttribute" => ContentRegistrationInfo.Epoch(),
+                "RegisterStoryAttribute" => ContentRegistrationInfo.Story(),
                 _ => default,
             };
             return info.DisplayName != null;
@@ -759,8 +843,17 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 "RegisterMonster" or "Monster" => ContentRegistrationInfo.Monster(),
                 "RegisterPower" or "Power" => ContentRegistrationInfo.Power(),
                 "RegisterOrb" or "Orb" => ContentRegistrationInfo.Orb(),
+                "RegisterEnchantment" or "Enchantment" => ContentRegistrationInfo.Enchantment(),
+                "RegisterAffliction" or "Affliction" => ContentRegistrationInfo.Affliction(),
+                "RegisterAchievement" or "Achievement" => ContentRegistrationInfo.Achievement(),
+                "RegisterSharedEvent" or "SharedEvent" => ContentRegistrationInfo.Event(),
+                "RegisterGlobalEncounter" or "GlobalEncounter" => ContentRegistrationInfo.Encounter(),
+                "RegisterActEncounter" or "ActEncounter" => ContentRegistrationInfo.Encounter(modelTypeArgumentIndex: 1),
+                "RegisterActEvent" or "ActEvent" => ContentRegistrationInfo.Event(modelTypeArgumentIndex: 1),
                 "RegisterSharedAncient" or "SharedAncient" => ContentRegistrationInfo.Ancient(),
                 "RegisterActAncient" or "ActAncient" => ContentRegistrationInfo.Ancient(modelTypeArgumentIndex: 1),
+                "RegisterEpoch" or "Epoch" => ContentRegistrationInfo.Epoch(),
+                "RegisterStory" or "Story" => ContentRegistrationInfo.Story(),
                 _ => default,
             };
             return info.DisplayName != null;
@@ -770,6 +863,12 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
         {
             return methodName == "RegisterModAssembly" &&
                    (method?.ContainingType?.Name == "ModTypeDiscoveryHub" || method == null);
+        }
+
+        private static bool IsEnsureGodotScriptsRegistered(string methodName, IMethodSymbol? method)
+        {
+            return methodName == "EnsureGodotScriptsRegistered" &&
+                   (method?.ContainingType?.Name == "RitsuLibFramework" || method == null);
         }
 
         private static PublicEntryOverride ResolveAttributePublicEntry(
@@ -1416,6 +1515,44 @@ public sealed class RitsuLibModAnalyzer : DiagnosticAnalyzer
         public static ContentRegistrationInfo Orb()
         {
             return new("orb model", "ORB", "orbType", 0, CreateTemplates("orbs", "title", "description", "smartDescription"));
+        }
+
+        public static ContentRegistrationInfo Enchantment()
+        {
+            return new("enchantment model", "ENCHANTMENT", "enchantmentType", 0, CreateTemplates("enchantments", "title", "description"));
+        }
+
+        public static ContentRegistrationInfo Affliction()
+        {
+            return new("affliction model", "AFFLICTION", "afflictionType", 0, CreateTemplates("afflictions", "title", "description"));
+        }
+
+        public static ContentRegistrationInfo Achievement()
+        {
+            return new("achievement model", "ACHIEVEMENT", "achievementType", 0, CreateTemplates("achievements", "title", "description"));
+        }
+
+        public static ContentRegistrationInfo Event(int modelTypeArgumentIndex = 0)
+        {
+            return new("event model", "EVENT", "eventType", modelTypeArgumentIndex, CreateTemplates(
+                "events",
+                "title",
+                "pages.INITIAL.description"));
+        }
+
+        public static ContentRegistrationInfo Encounter(int modelTypeArgumentIndex = 0)
+        {
+            return new("encounter model", "ENCOUNTER", "encounterType", modelTypeArgumentIndex, CreateTemplates("encounters", "title"));
+        }
+
+        public static ContentRegistrationInfo Epoch()
+        {
+            return new("epoch model", "EPOCH", "epochType", 0, CreateTemplates("epochs", "title", "description"));
+        }
+
+        public static ContentRegistrationInfo Story()
+        {
+            return new("story model", "STORY", "storyType", 0, CreateTemplates("stories", "title", "description"));
         }
 
         public static ContentRegistrationInfo Ancient(int modelTypeArgumentIndex = 0)

@@ -11,6 +11,8 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Text;
 
 namespace Nothing.STS2RitsuLib.ModAnalyzers;
@@ -19,7 +21,7 @@ namespace Nothing.STS2RitsuLib.ModAnalyzers;
 public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
 {
     public sealed override ImmutableArray<string> FixableDiagnosticIds { get; } =
-        ImmutableArray.Create(RitsuLibModAnalyzer.MissingLocalizationId);
+        RitsuLibDiagnostics.FixableIds;
 
     public sealed override FixAllProvider GetFixAllProvider()
     {
@@ -29,15 +31,14 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
     public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         var requests = context.Diagnostics
+            .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
             .Select(ReadRequest)
             .Where(request => request != null)
             .Cast<LocalizationFixRequest>()
             .ToImmutableArray();
 
-        if (requests.Length == 0)
-            return;
-
-        if (await CanApplyJsonFixAsync(context.Document.Project, requests, context.CancellationToken).ConfigureAwait(false))
+        if (requests.Length > 0 &&
+            await CanApplyJsonFixAsync(context.Document.Project, requests, context.CancellationToken).ConfigureAwait(false))
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
@@ -47,12 +48,546 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 context.Diagnostics);
         }
 
+        if (requests.Length > 0)
+        {
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    RitsuLibUiText.InsertSnippetTitle,
+                    cancellationToken => InsertSnippetAsync(context.Document, requests, GetSourceSpan(context.Diagnostics[0]), cancellationToken),
+                    "InsertMissingRitsuLibLocalizationSnippet"),
+                context.Diagnostics.Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId).ToImmutableArray());
+        }
+
+        foreach (var diagnostic in context.Diagnostics.Where(diagnostic => diagnostic.Id != RitsuLibDiagnostics.MissingLocalizationId))
+            RegisterContractCodeFix(context, diagnostic);
+    }
+
+    private static void RegisterContractCodeFix(CodeFixContext context, Diagnostic diagnostic)
+    {
+        switch (diagnostic.Id)
+        {
+            case RitsuLibDiagnostics.DisposableNotDisposedId:
+                context.RegisterCodeFix(
+                    CodeAction.Create(
+                        RitsuLibUiText.WrapInUsingTitle,
+                        cancellationToken => WrapInUsingAsync(context.Document, diagnostic, cancellationToken),
+                        "WrapRitsuLibDisposableInUsing"),
+                    diagnostic);
+                return;
+
+            case RitsuLibDiagnostics.ContentPackBuilderNotAppliedId:
+                context.RegisterCodeFix(
+                    CodeAction.Create(
+                        RitsuLibUiText.AddApplyTitle,
+                        cancellationToken => AddApplyAsync(context.Document, diagnostic, cancellationToken),
+                        "AddRitsuLibContentPackBuilderApply"),
+                    diagnostic);
+                return;
+
+            case RitsuLibDiagnostics.AudioSourcePathShapeId:
+                if (TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.ExpectedPrefix, out var expectedPrefix) &&
+                    expectedPrefix is "event:/" or "snapshot:/")
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.AddPrefixTitle(expectedPrefix),
+                            cancellationToken => AddAudioSourcePrefixAsync(context.Document, diagnostic, expectedPrefix, cancellationToken),
+                            $"AddRitsuLibAudioSource{expectedPrefix.Replace(":", "")}Prefix"),
+                        diagnostic);
+                    return;
+                }
+                break;
+
+            case RitsuLibDiagnostics.MissingRegistrationId:
+                if (TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.InsertionText, out var registerText))
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertRegisterModAssemblyTitle,
+                            cancellationToken => InsertInitializerStatementAsync(context.Document, diagnostic, registerText, cancellationToken),
+                            "InsertRitsuLibRegisterModAssembly"),
+                        diagnostic);
+                    return;
+                }
+
+                break;
+
+            case RitsuLibDiagnostics.MissingGodotScriptsId:
+                if (TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.InsertionText, out var godotText))
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertEnsureGodotScriptsTitle,
+                            cancellationToken => InsertInitializerStatementAsync(context.Document, diagnostic, godotText, cancellationToken),
+                            "InsertRitsuLibEnsureGodotScriptsRegistered"),
+                        diagnostic);
+                    return;
+                }
+
+                break;
+
+            case RitsuLibDiagnostics.ContentPackNotAppliedId:
+                context.RegisterCodeFix(
+                    CodeAction.Create(
+                        RitsuLibUiText.AddApplyTitle,
+                        cancellationToken => AddApplyAsync(context.Document, diagnostic, cancellationToken),
+                        "AddRitsuLibContentPackApply"),
+                    diagnostic);
+                return;
+
+            case RitsuLibDiagnostics.SettingsContractId:
+                if (IsStubKind(diagnostic, "SettingsCallback"))
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertSettingsStubTitle,
+                            cancellationToken => InsertMemberStubAsync(context.Document, diagnostic, cancellationToken),
+                            "InsertRitsuLibSettingsStub"),
+                        diagnostic);
+                    return;
+                }
+
+                break;
+
+            case RitsuLibDiagnostics.PatchContractId:
+            case RitsuLibDiagnostics.PatchTargetId:
+                if (TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.StubKind, out _))
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertPatchStubTitle,
+                            cancellationToken => InsertMemberStubAsync(context.Document, diagnostic, cancellationToken),
+                            "InsertRitsuLibPatchStub"),
+                        diagnostic);
+                    return;
+                }
+
+                break;
+        }
+
         context.RegisterCodeFix(
             CodeAction.Create(
-                RitsuLibUiText.InsertSnippetTitle,
-                cancellationToken => InsertSnippetAsync(context.Document, requests, context.Diagnostics[0].Location.SourceSpan, cancellationToken),
-                "InsertMissingRitsuLibLocalizationSnippet"),
-            context.Diagnostics);
+                RitsuLibUiText.InsertTodoFixTitle,
+                cancellationToken => InsertTodoCommentAsync(context.Document, diagnostic, null, cancellationToken),
+                "InsertRitsuLibTodoSnippet"),
+            diagnostic);
+    }
+
+    private static async Task<Document> AddApplyAsync(
+        Document document,
+        Diagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        var node = FindNodeForDiagnostic(root, diagnostic);
+        var invocation = node.FirstAncestorOrSelf<InvocationExpressionSyntax>() ??
+                         node.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
+        if (invocation == null)
+            return await InsertTodoCommentAsync(document, diagnostic, ".Apply()", cancellationToken).ConfigureAwait(false);
+
+        var outer = GetOutermostInvocationInChain(invocation);
+        if (InvocationChainContains(outer, "Apply"))
+            return document;
+
+        var applyInvocation = SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    outer.WithoutTrivia(),
+                    SyntaxFactory.IdentifierName("Apply")))
+            .WithTriviaFrom(outer)
+            .WithAdditionalAnnotations(Formatter.Annotation);
+
+        return document.WithSyntaxRoot(root.ReplaceNode(outer, applyInvocation));
+    }
+
+    private static async Task<Document> WrapInUsingAsync(
+        Document document,
+        Diagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        var node = FindNodeForDiagnostic(root, diagnostic);
+        var invocation = node.FirstAncestorOrSelf<InvocationExpressionSyntax>() ??
+                         node.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
+        if (invocation?.Parent is not ExpressionStatementSyntax expressionStatement)
+            return await InsertTodoCommentAsync(document, diagnostic, null, cancellationToken).ConfigureAwait(false);
+
+        var methodName = TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.DisposableMethod, out var name) ? name : "handle";
+        var variableName = $"_{char.ToLowerInvariant(methodName[0])}{methodName.Substring(1)}";
+
+        var usingStatement = SyntaxFactory.UsingStatement(
+            declaration: SyntaxFactory.VariableDeclaration(
+                SyntaxFactory.IdentifierName("var"),
+                SyntaxFactory.SeparatedList(new[]
+                {
+                    SyntaxFactory.VariableDeclarator(variableName)
+                        .WithInitializer(SyntaxFactory.EqualsValueClause(invocation.WithoutTrivia()))
+                })),
+            expression: null,
+            statement: SyntaxFactory.EmptyStatement())
+            .WithTriviaFrom(expressionStatement)
+            .WithAdditionalAnnotations(Formatter.Annotation);
+
+        return document.WithSyntaxRoot(root.ReplaceNode(expressionStatement, usingStatement));
+    }
+
+    private static async Task<Document> AddAudioSourcePrefixAsync(
+        Document document,
+        Diagnostic diagnostic,
+        string prefix,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        var node = FindNodeForDiagnostic(root, diagnostic);
+        var invocation = node.FirstAncestorOrSelf<InvocationExpressionSyntax>() ??
+                         node.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
+        if (invocation == null)
+            return document;
+
+        var argument = invocation.ArgumentList.Arguments.FirstOrDefault();
+        if (argument?.Expression is not LiteralExpressionSyntax literal ||
+            !literal.IsKind(SyntaxKind.StringLiteralExpression))
+            return document;
+
+        var currentText = literal.Token.ValueText;
+        if (currentText.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return document;
+
+        var newLiteral = SyntaxFactory.LiteralExpression(
+            SyntaxKind.StringLiteralExpression,
+            SyntaxFactory.Literal(prefix + currentText));
+
+        return document.WithSyntaxRoot(root.ReplaceNode(literal, newLiteral.WithTriviaFrom(literal)));
+    }
+
+    private static async Task<Document> InsertInitializerStatementAsync(
+        Document document,
+        Diagnostic diagnostic,
+        string statementText,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        var method = FindInitializerMethod(root, diagnostic);
+        if (method == null)
+            return await InsertTodoCommentAsync(document, diagnostic, statementText, cancellationToken).ConfigureAwait(false);
+
+        var statement = SyntaxFactory.ParseStatement(EnsureStatementTerminator(statementText))
+            .WithAdditionalAnnotations(Formatter.Annotation);
+
+        MethodDeclarationSyntax updatedMethod;
+        if (method.Body != null)
+        {
+            updatedMethod = method.WithBody(method.Body.WithStatements(method.Body.Statements.Insert(0, statement)));
+        }
+        else if (method.ExpressionBody != null)
+        {
+            var expressionStatement = SyntaxFactory.ExpressionStatement(method.ExpressionBody.Expression);
+            updatedMethod = method
+                .WithBody(SyntaxFactory.Block(statement, expressionStatement))
+                .WithExpressionBody(null)
+                .WithSemicolonToken(default);
+        }
+        else
+        {
+            return await InsertTodoCommentAsync(document, diagnostic, statementText, cancellationToken).ConfigureAwait(false);
+        }
+
+        updatedMethod = updatedMethod.WithAdditionalAnnotations(Formatter.Annotation);
+        return document.WithSyntaxRoot(root.ReplaceNode(method, updatedMethod));
+    }
+
+    private static async Task<Document> InsertMemberStubAsync(
+        Document document,
+        Diagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        var type = FindTargetType(root, diagnostic);
+        if (type == null)
+            return await InsertTodoCommentAsync(document, diagnostic, null, cancellationToken).ConfigureAwait(false);
+
+        var memberTexts = BuildMemberStubTexts(type, diagnostic).ToArray();
+        if (memberTexts.Length == 0)
+            return await InsertTodoCommentAsync(document, diagnostic, null, cancellationToken).ConfigureAwait(false);
+
+        var members = memberTexts
+            .Select(text => SyntaxFactory.ParseMemberDeclaration(text))
+            .Where(member => member != null)
+            .Cast<MemberDeclarationSyntax>()
+            .Select(member => member.WithAdditionalAnnotations(Formatter.Annotation))
+            .ToArray();
+        if (members.Length == 0)
+            return await InsertTodoCommentAsync(document, diagnostic, null, cancellationToken).ConfigureAwait(false);
+
+        var updatedType = type
+            .WithMembers(type.Members.AddRange(members))
+            .WithAdditionalAnnotations(Formatter.Annotation);
+        return document.WithSyntaxRoot(root.ReplaceNode(type, updatedType));
+    }
+
+    private static IEnumerable<string> BuildMemberStubTexts(TypeDeclarationSyntax type, Diagnostic diagnostic)
+    {
+        if (!TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.StubKind, out var stubKind))
+            yield break;
+
+        TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.MethodName, out var methodName);
+        var typeName = type.Identifier.ValueText;
+
+        switch (stubKind)
+        {
+            case "SettingsCallback":
+                if (!IsSafeIdentifier(methodName) || TypeHasMethod(type, methodName!))
+                    yield break;
+
+                yield return $$"""
+                    private static void {{methodName}}()
+                    {
+                        // TODO: Match the RitsuLib settings callback signature expected by this attribute.
+                    }
+                    """;
+                yield break;
+
+            case "PatchMethod":
+                if (!TypeHasProperty(type, "PatchId"))
+                    yield return $$"""
+                        public static string PatchId => nameof({{typeName}});
+                        """;
+
+                if (!TypeHasMethod(type, "GetTargets"))
+                    yield return """
+                        public static STS2RitsuLib.Patching.Models.ModPatchTarget[] GetTargets()
+                        {
+                            return System.Array.Empty<STS2RitsuLib.Patching.Models.ModPatchTarget>();
+                        }
+                        """;
+                yield break;
+
+            case "ModPatches":
+                if (!TypeHasMethod(type, "AddTo"))
+                    yield return """
+                        public static void AddTo(STS2RitsuLib.Patching.Core.ModPatcher patcher)
+                        {
+                            // TODO: Register patch groups on the RitsuLib patcher.
+                        }
+                        """;
+                yield break;
+
+            case "PatchTargetMethod":
+                if (!IsSafeIdentifier(methodName) || TypeHasMethod(type, methodName!))
+                    yield break;
+
+                var modifier = diagnostic.GetMessage().IndexOf("static method", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                               diagnostic.GetMessage().IndexOf("FromMethod", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? "public static"
+                    : "public";
+                yield return $$"""
+                    {{modifier}} void {{methodName}}()
+                    {
+                        // TODO: Match the target method signature expected by the patch.
+                    }
+                    """;
+                yield break;
+
+            case "PatchTargetProperty":
+                if (!IsSafeIdentifier(methodName) || TypeHasProperty(type, methodName!))
+                    yield break;
+
+                yield return $$"""
+                    public object? {{methodName}} => null;
+                    """;
+                yield break;
+        }
+    }
+
+    private static async Task<Document> InsertTodoCommentAsync(
+        Document document,
+        Diagnostic diagnostic,
+        string? detail,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        var node = FindNodeForDiagnostic(root, diagnostic);
+        while (node.Parent != null &&
+               node.Kind() is not SyntaxKind.ClassDeclaration and
+                   not SyntaxKind.StructDeclaration and
+                   not SyntaxKind.RecordDeclaration and
+                   not SyntaxKind.MethodDeclaration and
+                   not SyntaxKind.InvocationExpression and
+                   not SyntaxKind.Attribute)
+        {
+            node = node.Parent;
+        }
+
+        var comment = SyntaxFactory.Comment(BuildTodoComment(diagnostic, detail));
+        var newNode = node.WithLeadingTrivia(node.GetLeadingTrivia().Add(comment).Add(SyntaxFactory.ElasticCarriageReturnLineFeed));
+        return document.WithSyntaxRoot(root.ReplaceNode(node, newNode));
+    }
+
+    private static string BuildTodoComment(Diagnostic diagnostic, string? detail)
+    {
+        var message = SanitizeCommentText(diagnostic.GetMessage());
+        var extra = string.IsNullOrWhiteSpace(detail) ? string.Empty : Environment.NewLine + SanitizeCommentText(detail!);
+        return $"/*{Environment.NewLine}TODO RitsuLib analyzer: {message}{extra}{Environment.NewLine}*/";
+    }
+
+    private static SyntaxNode FindNodeForDiagnostic(SyntaxNode root, Diagnostic diagnostic)
+    {
+        if (!diagnostic.Location.IsInSource)
+            return root.ChildNodes().FirstOrDefault() ?? root;
+
+        var span = GetSourceSpan(diagnostic);
+        if (span.Length == 0 && span.Start < root.FullSpan.End)
+            return root.FindToken(span.Start).Parent ?? root;
+
+        return root.FindNode(span, getInnermostNodeForTie: true);
+    }
+
+    private static MethodDeclarationSyntax? FindInitializerMethod(SyntaxNode root, Diagnostic diagnostic)
+    {
+        if (diagnostic.Location.IsInSource)
+        {
+            var containing = FindNodeForDiagnostic(root, diagnostic).FirstAncestorOrSelf<MethodDeclarationSyntax>();
+            if (containing != null)
+                return containing;
+        }
+
+        var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().ToArray();
+        return methods.FirstOrDefault(HasModInitializerAttribute) ??
+               methods.FirstOrDefault(method => method.Identifier.ValueText == "Initialize") ??
+               methods.FirstOrDefault(method => method.Modifiers.Any(SyntaxKind.StaticKeyword)) ??
+               methods.FirstOrDefault();
+    }
+
+    private static TypeDeclarationSyntax? FindTargetType(SyntaxNode root, Diagnostic diagnostic)
+    {
+        if (diagnostic.Location.IsInSource)
+        {
+            var containing = FindNodeForDiagnostic(root, diagnostic).FirstAncestorOrSelf<TypeDeclarationSyntax>();
+            if (containing != null)
+            {
+                if (!TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.TypeName, out var requestedName) ||
+                    string.Equals(containing.Identifier.ValueText, requestedName, StringComparison.Ordinal))
+                {
+                    return containing;
+                }
+            }
+        }
+
+        if (!TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.TypeName, out var typeName))
+            return null;
+
+        return root.DescendantNodes()
+            .OfType<TypeDeclarationSyntax>()
+            .FirstOrDefault(type => string.Equals(type.Identifier.ValueText, typeName, StringComparison.Ordinal));
+    }
+
+    private static bool HasModInitializerAttribute(MethodDeclarationSyntax method)
+    {
+        return method.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Select(attribute => attribute.Name.ToString().Split('.').Last())
+            .Any(name => name == "ModInitializer" || name == "ModInitializerAttribute");
+    }
+
+    private static InvocationExpressionSyntax GetOutermostInvocationInChain(InvocationExpressionSyntax invocation)
+    {
+        var current = invocation;
+        for (var node = invocation.Parent; node != null; node = node.Parent)
+        {
+            if (node is InvocationExpressionSyntax parentInvocation && parentInvocation.Span.Contains(current.Span))
+            {
+                current = parentInvocation;
+                continue;
+            }
+
+            if (node is MemberAccessExpressionSyntax or MemberBindingExpressionSyntax or ConditionalAccessExpressionSyntax)
+                continue;
+
+            break;
+        }
+
+        return current;
+    }
+
+    private static bool InvocationChainContains(InvocationExpressionSyntax invocation, string methodName)
+    {
+        return invocation.DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Any(candidate => candidate.Expression switch
+            {
+                MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText == methodName,
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText == methodName,
+                _ => false,
+            });
+    }
+
+    private static bool TypeHasMethod(TypeDeclarationSyntax type, string name)
+    {
+        return type.Members.OfType<MethodDeclarationSyntax>()
+            .Any(member => member.Identifier.ValueText == name);
+    }
+
+    private static bool TypeHasProperty(TypeDeclarationSyntax type, string name)
+    {
+        return type.Members.OfType<PropertyDeclarationSyntax>()
+            .Any(member => member.Identifier.ValueText == name);
+    }
+
+    private static bool IsStubKind(Diagnostic diagnostic, string stubKind)
+    {
+        return TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.StubKind, out var actual) &&
+               string.Equals(actual, stubKind, StringComparison.Ordinal);
+    }
+
+    private static bool TryGetProperty(Diagnostic diagnostic, string name, out string value)
+    {
+        if (diagnostic.Properties.TryGetValue(name, out var raw) && !string.IsNullOrWhiteSpace(raw))
+        {
+            value = raw!;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static bool IsSafeIdentifier(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value) && SyntaxFacts.IsValidIdentifier(value!);
+    }
+
+    private static string EnsureStatementTerminator(string statementText)
+    {
+        var trimmed = statementText.Trim();
+        return trimmed.EndsWith(";", StringComparison.Ordinal) ? trimmed : trimmed + ";";
+    }
+
+    private static TextSpan GetSourceSpan(Diagnostic diagnostic)
+    {
+        return diagnostic.Location.IsInSource ? diagnostic.Location.SourceSpan : default;
+    }
+
+    private static string SanitizeCommentText(string value)
+    {
+        return value.Replace("*/", "* /");
     }
 
     private static LocalizationFixRequest? ReadRequest(Diagnostic diagnostic)

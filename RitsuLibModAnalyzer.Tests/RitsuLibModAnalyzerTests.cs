@@ -24,23 +24,49 @@ namespace RitsuLibModAnalyzer.Tests;
 public sealed class RitsuLibModAnalyzerTests
 {
     [Fact]
-    public void SupportsOnlyMissingLocalizationDiagnostic()
+    public void SupportsFullDiagnosticSuite()
     {
         using var culture = UseCulture("en-US");
         var analyzer = new AnalyzerUnderTest();
-        var descriptor = Assert.Single(analyzer.SupportedDiagnostics);
-        Assert.Equal(AnalyzerUnderTest.MissingLocalizationId, descriptor.Id);
+        var descriptors = analyzer.SupportedDiagnostics.ToDictionary(descriptor => descriptor.Id, StringComparer.Ordinal);
+        Assert.Equal(25, descriptors.Count);
+
+        var descriptor = descriptors[AnalyzerUnderTest.MissingLocalizationId];
         Assert.Equal("Missing RitsuLib localization", descriptor.Title.ToString(CultureInfo.CurrentUICulture));
         Assert.Equal("RitsuLib localization keys should exist in the matching language JSON.", descriptor.Description.ToString(CultureInfo.CurrentUICulture));
         Assert.DoesNotContain(WellKnownDiagnosticTags.CompilationEnd, descriptor.CustomTags);
-        Assert.DoesNotContain(analyzer.SupportedDiagnostics, diagnostic => diagnostic.Id is "RITSU002" or "RITSU003");
+
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU002"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU003"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU004"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU005"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU006"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU007"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Info, descriptors["RITSU008"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU009"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU010"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU011"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU012"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU013"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU014"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU015"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Info, descriptors["RITSU016"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU017"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Error, descriptors["RITSU018"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU019"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU020"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Info, descriptors["RITSU021"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU022"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU023"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU024"].DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptors["RITSU025"].DefaultSeverity);
     }
 
     [Fact]
     public void LocalizesDescriptorTextForChineseCulture()
     {
         using var culture = UseCulture("zh-CN");
-        var descriptor = Assert.Single(new AnalyzerUnderTest().SupportedDiagnostics);
+        var descriptor = new AnalyzerUnderTest().SupportedDiagnostics.Single(diagnostic => diagnostic.Id == AnalyzerUnderTest.MissingLocalizationId);
 
         Assert.Equal("缺少 RitsuLib 本地化", descriptor.Title.ToString(CultureInfo.CurrentUICulture));
         Assert.Equal("RitsuLib 引用的本地化键应存在于对应语言 JSON 中。", descriptor.Description.ToString(CultureInfo.CurrentUICulture));
@@ -474,6 +500,260 @@ public sealed class RitsuLibModAnalyzerTests
         Assert.Contains(actions, action => action.Title.StartsWith("Insert localization", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task ReportsManifestDependencyAndModIdMismatch()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void BuildPack()
+                {
+                    RitsuLibFramework.CreateContentPack("OtherMod").Apply();
+                }
+                """),
+            AdditionalJson(@"C:\mod\mod_manifest.json", """
+            {
+              "id": "ManosabaLin",
+              "dependencies": []
+            }
+            """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU002");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU003" && d.GetMessage().Contains("OtherMod"));
+    }
+
+    [Fact]
+    public async Task ReportsMissingRegistrationAndGodotScripts()
+    {
+        var diagnostics = await AnalyzeAsync(
+            SourceWithoutRegistration("""
+                public sealed class CardPool { }
+
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+
+                public sealed class SceneNode : Godot.Node { }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU004");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU005");
+    }
+
+    [Fact]
+    public async Task ReportsContentIdentityIdShapeAndLegacyPoolDiagnostics()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class CardPool { }
+
+                [RegisterCard(typeof(CardPool), FullPublicEntry = "same_entry")]
+                public sealed class FirstCard { }
+
+                [RegisterCard(typeof(CardPool), FullPublicEntry = "same_entry")]
+                public sealed class SecondCard { }
+
+                public abstract class LegacyPoolBase
+                {
+                    public virtual System.Collections.Generic.IEnumerable<Type> CardTypes => Array.Empty<Type>();
+                }
+
+                public sealed class LegacyPool : LegacyPoolBase
+                {
+                    public override System.Collections.Generic.IEnumerable<Type> CardTypes => Array.Empty<Type>();
+                }
+
+                public static void RegisterIds()
+                {
+                    ModKeywordRegistry.For(MainFile.ModId).RegisterOwned("Bad Stem");
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU007");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU008" && d.GetMessage().Contains("Bad Stem"));
+        Assert.Contains(diagnostics, d => d.Id == "RITSU016");
+    }
+
+    [Fact]
+    public async Task ReportsContentPackApplySettingsAndDataStoreDiagnostics()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class CardPool { }
+                public sealed class MissingApplyCard { }
+
+                [ModSettingsBinding(ReadUsing = "MissingRead")]
+                public sealed class SettingsModel { }
+
+                public static void Build()
+                {
+                    RitsuLibFramework.CreateContentPack(MainFile.ModId)
+                        .Card<CardPool, MissingApplyCard>();
+
+                    RitsuLibFramework.RegisterModSettings(MainFile.ModId, "Settings", "main")
+                        .AddSection("general")
+                        .AddSlider("volume", "Volume", "", 10, 1, 0);
+
+                    RitsuLibFramework.RegisterModSettings(MainFile.ModId, "Settings", "main")
+                        .AddSection("general")
+                        .AddChoice("mode", "Mode", "", new string[] { });
+
+                    ModDataStore.Register<int>("bad key", "save.txt");
+                    ModDataStore.Register<int>("bad key", "save.txt");
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU006");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU009" && d.GetMessage().Contains("MissingRead"));
+        Assert.Contains(diagnostics, d => d.Id == "RITSU009" && d.GetMessage().Contains("min must be less"));
+        Assert.Contains(diagnostics, d => d.Id == "RITSU009" && d.GetMessage().Contains("at least one option"));
+        Assert.Contains(diagnostics, d => d.Id == "RITSU010" && d.GetMessage().Contains("save.txt"));
+        Assert.Contains(diagnostics, d => d.Id == "RITSU010" && d.GetMessage().Contains("Duplicate ModDataStore key"));
+    }
+
+    [Fact]
+    public async Task ReportsPatchResourceAudioAndRuntimeDiagnostics()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class PatchOwner : IPatchMethod { }
+                public sealed class PatchGroup : IModPatches { }
+                public sealed class TargetType { }
+
+                public static void Build()
+                {
+                    DynamicPatchBuilder.FromMethod(typeof(PatchOwner), "MissingPatchMethod");
+                    new DynamicPatchBuilder().AddMethod(typeof(TargetType), "MissingTargetMethod");
+                    new DynamicPatchBuilder().AddPropertyGetter(typeof(TargetType), "MissingProperty");
+
+                    RitsuLibFramework.LoadIcon("assets/icon.png");
+                    RitsuLibFramework.RegisterBank("soundtrack");
+                    RitsuLibFramework.PlayEvent("foo:/bad_event");
+                    RitsuLibFramework.SetBus("foo:/bad_bus");
+                    RitsuLibFramework.SetGuid("not-a-guid");
+
+                    RitsuLibFramework.RegisterFreePlayBinding("");
+                    RuntimeHotkeyService.Register("Ctrl++");
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU011");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU012");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU013");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU014");
+        Assert.Contains(diagnostics, d => d.Id == "RITSU015");
+    }
+
+    [Fact]
+    public async Task ApplyCodeFixAddsApplyToContentPackChain()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public sealed class CardPool { }
+                public sealed class MissingApplyCard { }
+
+                public static void Build()
+                {
+                    RitsuLibFramework.CreateContentPack(MainFile.ModId)
+                        .Card<CardPool, MissingApplyCard>();
+                }
+                """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == "RITSU006"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add .Apply()");
+        var text = await GetDocumentTextAsync(changed);
+
+        Assert.Contains(".Apply()", text);
+    }
+
+    [Fact]
+    public async Task RegistrationCodeFixesInsertInitializerStatements()
+    {
+        using var culture = UseCulture("en-US");
+        var registrationProject = CreateProject(
+            SourceWithoutRegistration("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """));
+        var registrationDiagnostic = Assert.Single((await AnalyzeProjectAsync(registrationProject)).Where(d => d.Id == "RITSU004"));
+        var registrationChanged = await ApplyCodeFixAsync(registrationProject, registrationDiagnostic, "Insert RegisterModAssembly");
+        var registrationText = await GetDocumentTextAsync(registrationChanged);
+        Assert.Contains("STS2RitsuLib.Interop.ModTypeDiscoveryHub.RegisterModAssembly", registrationText);
+
+        var godotProject = CreateProject(
+            SourceWithoutRegistration("""
+                public sealed class SceneNode : Godot.Node { }
+                """));
+        var godotDiagnostic = Assert.Single((await AnalyzeProjectAsync(godotProject)).Where(d => d.Id == "RITSU005"));
+        var godotChanged = await ApplyCodeFixAsync(godotProject, godotDiagnostic, "Insert EnsureGodotScriptsRegistered");
+        var godotText = await GetDocumentTextAsync(godotChanged);
+        Assert.Contains("STS2RitsuLib.RitsuLibFramework.EnsureGodotScriptsRegistered", godotText);
+    }
+
+    [Fact]
+    public async Task SettingsCodeFixAddsCallbackStub()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [ModSettingsBinding(ReadUsing = "MissingRead")]
+                public sealed class SettingsModel { }
+                """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == "RITSU009" && d.GetMessage().Contains("MissingRead")));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Generate settings");
+        var text = await GetDocumentTextAsync(changed);
+
+        Assert.Contains("private static void MissingRead()", text);
+    }
+
+    [Fact]
+    public async Task PatchCodeFixesAddRequiredMembersAndTargetStub()
+    {
+        using var culture = UseCulture("en-US");
+        var patchProject = CreateProject(
+            Source("""
+                public sealed class PatchOwner : IPatchMethod { }
+                """));
+        var patchDiagnostic = (await AnalyzeProjectAsync(patchProject)).First(d => d.Id == "RITSU011");
+        var patchChanged = await ApplyCodeFixAsync(patchProject, patchDiagnostic, "Generate required patch");
+        var patchText = await GetDocumentTextAsync(patchChanged);
+        Assert.Contains("public static string PatchId", patchText);
+        Assert.Contains("public static STS2RitsuLib.Patching.Models.ModPatchTarget[] GetTargets()", patchText);
+
+        var targetProject = CreateProject(
+            Source("""
+                public sealed class TargetType { }
+
+                public static void Build()
+                {
+                    new DynamicPatchBuilder().AddPropertyGetter(typeof(TargetType), "MissingProperty");
+                }
+                """));
+        var targetDiagnostic = Assert.Single((await AnalyzeProjectAsync(targetProject)).Where(d => d.Id == "RITSU012"));
+        var targetChanged = await ApplyCodeFixAsync(targetProject, targetDiagnostic, "Generate required patch");
+        var targetText = await GetDocumentTextAsync(targetChanged);
+        Assert.Contains("public object? MissingProperty => null;", targetText);
+    }
+
+    [Fact]
+    public async Task TodoFallbackCodeFixInsertsDiagnosticSnippet()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void UseRuntime()
+                {
+                    RuntimeHotkeyService.Register("Ctrl++");
+                }
+                """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == "RITSU015"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Insert RitsuLib TODO");
+        var text = await GetDocumentTextAsync(changed);
+
+        Assert.Contains("TODO RitsuLib analyzer:", text);
+    }
+
     private static AdditionalText CompleteCardKeywordJson(string language, string id)
     {
         return AdditionalJson($@"C:\mod\localization\{language}\card_keywords.json", $$"""
@@ -484,19 +764,305 @@ public sealed class RitsuLibModAnalyzerTests
         """);
     }
 
+    // RITSU017: Disposable handle not disposed
+    [Fact]
+    public async Task ReportsUndisposedAudioHandle()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void PlayAudio(IGameAudio audio)
+                {
+                    audio.PlayLoop(AudioSource.Event("event:/sfx/test"));
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU017" && d.GetMessage().Contains("PlayLoop"));
+    }
+
+    [Fact]
+    public async Task DoesNotReportWhenHandleIsAssigned()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void PlayAudio(IGameAudio audio)
+                {
+                    var handle = audio.PlayLoop(AudioSource.Event("event:/sfx/test"));
+                }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU017");
+    }
+
+    [Fact]
+    public async Task ReportsUndisposedSubscribeLifecycle()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void Subscribe()
+                {
+                    RitsuLibFramework.SubscribeLifecycle<int>(e => { });
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU017" && d.GetMessage().Contains("SubscribeLifecycle"));
+    }
+
+    // RITSU018: ContentPackBuilder.For() not applied
+    [Fact]
+    public async Task ReportsContentPackBuilderForNotApplied()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void RegisterContent()
+                {
+                    ModContentPackBuilder.For(MainFile.ModId)
+                        .Card<CardPool, MyCard>()
+                        .Power<MyPower>();
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU018");
+    }
+
+    [Fact]
+    public async Task DoesNotReportContentPackBuilderForWithApply()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void RegisterContent()
+                {
+                    ModContentPackBuilder.For(MainFile.ModId)
+                        .Card<CardPool, MyCard>()
+                        .Apply();
+                }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU018");
+    }
+
+    // RITSU019: AudioSource path shape
+    [Fact]
+    public async Task ReportsAudioSourceEventMissingPrefix()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void PlayAudio()
+                {
+                    AudioSource.Event("sfx/block");
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU019" && d.GetMessage().Contains("event:/"));
+    }
+
+    [Fact]
+    public async Task DoesNotReportAudioSourceEventWithPrefix()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void PlayAudio()
+                {
+                    AudioSource.Event("event:/sfx/block");
+                }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU019");
+    }
+
+    [Fact]
+    public async Task ReportsAudioSourceSnapshotMissingPrefix()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void PlaySnapshot()
+                {
+                    AudioSource.Snapshot("snapshot:/music/pause");
+                }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU019");
+    }
+
+    // RITSU020: ModInterop attribute shape
+    [Fact]
+    public async Task ReportsModInteropEmptyModId()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [ModInterop("")]
+                public sealed class MyInterop { }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU020");
+    }
+
+    [Fact]
+    public async Task DoesNotReportModInteropWithValidId()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [ModInterop("com.example.other-mod")]
+                public sealed class MyInterop { }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU020");
+    }
+
+    // RITSU021: Character template legacy override
+    [Fact]
+    public async Task ReportsCharacterTemplateLegacyOverride()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public class MyCharacter : ModCharacterTemplate
+                {
+                    public override System.Collections.Generic.IEnumerable<System.Type> StartingDeckTypes => System.Array.Empty<System.Type>();
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU021");
+    }
+
+    // RITSU022: Settings subpage reference
+    [Fact]
+    public async Task ReportsSettingsSubpageReferenceToMissingPage()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void BuildSettings()
+                {
+                    RitsuLibFramework.RegisterModSettings(MainFile.ModId, "My Settings", page =>
+                    {
+                        page.AddSection("general", section =>
+                        {
+                            section.AddSubpage("link", "Link", "nonexistent_page");
+                        });
+                    });
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU022" && d.GetMessage().Contains("nonexistent_page"));
+    }
+
+    // RITSU025: Lifecycle event type constraint
+    [Fact]
+    public async Task ReportsLifecycleEventNonSealedType()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public class MyEvent { }
+                public static void Subscribe()
+                {
+                    RitsuLibFramework.SubscribeLifecycleOnce<MyEvent>(e => { });
+                }
+                """));
+
+        Assert.Contains(diagnostics, d => d.Id == "RITSU025");
+    }
+
+    [Fact]
+    public async Task DoesNotReportLifecycleEventSealedType()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class MyEvent { }
+                public static void Subscribe()
+                {
+                    RitsuLibFramework.SubscribeLifecycleOnce<MyEvent>(e => { });
+                }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU025");
+    }
+
+    // Code fix tests for new diagnostics
+    [Fact]
+    public async Task DisposableCodeFixWrapsInUsing()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void PlayAudio(IGameAudio audio)
+                {
+                    audio.PlayLoop(AudioSource.Event("event:/sfx/test"));
+                }
+                """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == "RITSU017"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Wrap in using");
+        var text = await GetDocumentTextAsync(changed);
+        Assert.Contains("using", text);
+        Assert.Contains("_playLoop", text);
+    }
+
+    [Fact]
+    public async Task ContentPackBuilderForCodeFixAddsApply()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void RegisterContent()
+                {
+                    ModContentPackBuilder.For(MainFile.ModId)
+                        .Card<CardPool, MyCard>();
+                }
+                """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == "RITSU018"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add .Apply()");
+        var text = await GetDocumentTextAsync(changed);
+        Assert.Contains(".Apply()", text);
+    }
+
+    [Fact]
+    public async Task AudioSourcePathCodeFixAddsPrefix()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                public static void PlayAudio()
+                {
+                    AudioSource.Event("sfx/block");
+                }
+                """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == "RITSU019"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add event:/");
+        var text = await GetDocumentTextAsync(changed);
+        Assert.Contains("event:/sfx/block", text);
+    }
+
     private static string Source(string body)
+    {
+        return BuildSource(body, includeRegistration: true);
+    }
+
+    private static string SourceWithoutRegistration(string body)
+    {
+        return BuildSource(body, includeRegistration: false);
+    }
+
+    private static string BuildSource(string body, bool includeRegistration)
     {
         return $$"""
             using System;
             using System.Reflection;
             using STS2RitsuLib;
+            using STS2RitsuLib.Audio;
             using STS2RitsuLib.CardPiles;
+            using STS2RitsuLib.Scaffolding.Characters;
             using STS2RitsuLib.Content;
             using STS2RitsuLib.Interop;
             using STS2RitsuLib.Interop.AutoRegistration;
             using STS2RitsuLib.Keywords;
             using STS2RitsuLib.Localization;
+            using STS2RitsuLib.Data;
+            using STS2RitsuLib.Patching.Builders;
+            using STS2RitsuLib.Patching.Core;
+            using STS2RitsuLib.Patching.Models;
+            using STS2RitsuLib.RuntimeInput;
             using STS2RitsuLib.Scaffolding.Content;
+            using STS2RitsuLib.Settings;
             using STS2RitsuLib.TopBar;
             using STS2RitsuLib.Utils;
 
@@ -506,11 +1072,11 @@ public sealed class RitsuLibModAnalyzerTests
                 {
                     public const string ModId = "ManosabaLin";
 
-                    public static void Initialize()
-                    {
-                        ModTypeDiscoveryHub.RegisterModAssembly(ModId, Assembly.GetExecutingAssembly());
-                    }
+                public static void Initialize()
+                {
+            {{(includeRegistration ? "                        ModTypeDiscoveryHub.RegisterModAssembly(ModId, Assembly.GetExecutingAssembly());" : string.Empty)}}
                 }
+            }
 
                 internal static class TestContent
                 {
@@ -526,6 +1092,18 @@ public sealed class RitsuLibModAnalyzerTests
                     public static I18N CreateModLocalization(string modId, string instanceName) => new();
                     public static ModKeywordRegistry GetKeywordRegistry(string modId) => new();
                     public static ModContentRegistry GetContentRegistry(string modId) => new();
+                    public static void EnsureGodotScriptsRegistered(Assembly assembly) { }
+                    public static ModSettingsPageBuilder RegisterModSettings(string modId, string title, string? pageId = null) => new();
+                    public static void RegisterHealthBarForecast(string modId, string sourceId) { }
+                    public static void RegisterHealthBarVisualGraft(string modId, string sourceId) { }
+                    public static void RegisterFreePlayBinding(string bindingId) { }
+                    public static void LoadIcon(string resourcePath) { }
+                    public static void RegisterBank(string bankPath) { }
+                    public static void PlayEvent(string eventPath) { }
+                    public static void SetBus(string busPath) { }
+                    public static void SetGuid(string guid) { }
+                    public static IDisposable SubscribeLifecycle<TEvent>(Action<TEvent> handler) => null!;
+                    public static IDisposable SubscribeLifecycleOnce<TEvent>(Action<TEvent> handler) => null!;
                 }
             }
 
@@ -604,6 +1182,7 @@ public sealed class RitsuLibModAnalyzerTests
             {
                 public sealed class ModContentPackBuilder
                 {
+                    public static ModContentPackBuilder For(string modId) => new();
                     public ModContentPackBuilder Card<TPool, TCard>() => this;
                     public ModContentPackBuilder Card<TPool, TCard>(ModelPublicEntryOptions publicEntry) => this;
                     public ModContentPackBuilder Power<TPower>() => this;
@@ -611,6 +1190,7 @@ public sealed class RitsuLibModAnalyzerTests
                     public ModContentPackBuilder SharedAncient<TAncient>() => this;
                     public ModContentPackBuilder CardKeywordOwnedByLocNamespace(string localKeywordStem, string? iconPath = null) => this;
                     public ModContentPackBuilder KeywordOwned(string localKeywordStem, string titleTable = "card_keywords", string? titleKey = null, string? descriptionTable = null, string? descriptionKey = null) => this;
+                    public void Apply() { }
                 }
             }
 
@@ -663,6 +1243,162 @@ public sealed class RitsuLibModAnalyzerTests
                     public static void GetDialoguesForKey(string locTable, string baseKey) { }
                     public static void BuildDialogueSetForModAncient(string ancientEntry) { }
                 }
+            }
+
+            namespace STS2RitsuLib.Settings
+            {
+                public sealed class ModSettingsPageBuilder
+                {
+                    public ModSettingsSectionBuilder AddSection(string id, string? title = null) => new();
+                }
+
+                public sealed class ModSettingsSectionBuilder
+                {
+                    public ModSettingsSectionBuilder AddToggle(string id, bool defaultValue = false) => this;
+                    public ModSettingsSectionBuilder AddSlider(string id, string title, string description, double minValue, double maxValue, double step = 1) => this;
+                    public ModSettingsSectionBuilder AddChoice(string id, string title, string description, string[] options) => this;
+                    public ModSettingsSectionBuilder AddString(string id, string title = "") => this;
+                    public ModSettingsSectionBuilder AddButton(string id, string title = "") => this;
+                    public ModSettingsSectionBuilder AddSubpage(string id, string title, string targetPageId) => this;
+                }
+
+                public sealed class ModSettingsBindingAttribute : Attribute
+                {
+                    public string? ReadUsing { get; set; }
+                    public string? WriteUsing { get; set; }
+                    public string? SaveUsing { get; set; }
+                }
+
+                public sealed class ModSettingsButtonAttribute : Attribute
+                {
+                    public ModSettingsButtonAttribute(string id, string sectionId) { }
+                    public bool UseHostContext { get; set; }
+                }
+            }
+
+            namespace STS2RitsuLib.Data
+            {
+                public sealed class ModDataStore
+                {
+                    public static void Register<T>(string key, string fileName, object? scope = null, object? defaults = null, object? serializer = null, object? migrationConfig = null, object? migrations = null) { }
+                }
+            }
+
+            namespace STS2RitsuLib.Patching.Core
+            {
+                public sealed class ModPatcher { }
+            }
+
+            namespace STS2RitsuLib.Patching.Models
+            {
+                public interface IPatchMethod { }
+                public interface IModPatches { }
+                public sealed record ModPatchTarget(Type TargetType, string MethodName);
+            }
+
+            namespace STS2RitsuLib.Patching.Builders
+            {
+                public sealed class DynamicPatchBuilder
+                {
+                    public static void FromMethod(Type patchType, string methodName) { }
+                    public DynamicPatchBuilder AddMethod(Type targetType, string methodName) => this;
+                    public DynamicPatchBuilder AddPropertyGetter(Type targetType, string propertyName) => this;
+                }
+            }
+
+            namespace STS2RitsuLib.RuntimeInput
+            {
+                public sealed class RuntimeHotkeyOptions
+                {
+                    public string Id { get; set; } = "";
+                }
+
+                public static class RuntimeHotkeyService
+                {
+                    public static void Register(string bindingText) { }
+                }
+            }
+
+            namespace STS2RitsuLib.Audio
+            {
+                public interface IGameAudio
+                {
+                    AudioLoopHandle? PlayLoop(AudioSource source);
+                    AudioMusicHandle? PlayMusic(AudioSource source);
+                    AudioScopeToken CreateManualScope(string name);
+                    AudioAdaptiveMusicHandle FollowAdaptiveMusic(object plan);
+                }
+
+                public abstract class AudioSource
+                {
+                    public static StudioEventSource Event(string path) => new();
+                    public static SnapshotSource Snapshot(string path) => new();
+                    public static StudioGuidSource Guid(string guid) => new();
+                }
+
+                public class StudioEventSource : AudioSource { }
+                public class SnapshotSource : AudioSource { }
+                public class StudioGuidSource : AudioSource { }
+
+                public class AudioLoopHandle : IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class AudioMusicHandle : IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class AudioScopeToken : IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class AudioAdaptiveMusicHandle : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+
+            namespace STS2RitsuLib.Interop
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class ModInteropAttribute : Attribute
+                {
+                    public ModInteropAttribute(string targetModId) { }
+                }
+
+                [AttributeUsage(AttributeTargets.Method | AttributeTargets.Property)]
+                public sealed class InteropTargetAttribute : Attribute
+                {
+                    public InteropTargetAttribute() { }
+                    public InteropTargetAttribute(string name) { }
+                }
+            }
+
+            namespace STS2RitsuLib.Scaffolding.Characters
+            {
+                public abstract class ModCharacterTemplate
+                {
+                    public virtual System.Collections.Generic.IEnumerable<System.Type> StartingDeckTypes => System.Array.Empty<System.Type>();
+                    public virtual System.Collections.Generic.IEnumerable<System.Type> StartingRelicTypes => System.Array.Empty<System.Type>();
+                    public virtual System.Collections.Generic.IEnumerable<System.Type> StartingPotionTypes => System.Array.Empty<System.Type>();
+                }
+            }
+
+            namespace ManosabaLin
+            {
+                public class CardPool { }
+                public class MyCard { }
+                public class MyPower { }
+            }
+
+            namespace Godot
+            {
+                public class GodotObject { }
+                public class Node : GodotObject { }
+                public class Control : Node { }
             }
             """;
     }

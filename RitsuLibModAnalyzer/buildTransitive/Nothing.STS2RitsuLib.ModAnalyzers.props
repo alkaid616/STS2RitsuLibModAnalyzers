@@ -1,7 +1,35 @@
 <Project>
+    <PropertyGroup>
+        <RitsuLibAnalyzersAutoAdditionalFiles Condition="'$(RitsuLibAnalyzersAutoAdditionalFiles)' == ''">true</RitsuLibAnalyzersAutoAdditionalFiles>
+        <RitsuLibAnalyzersIncludeAssets Condition="'$(RitsuLibAnalyzersIncludeAssets)' == ''">true</RitsuLibAnalyzersIncludeAssets>
+        <RitsuLibAnalyzersIncludeGodotTextResources Condition="'$(RitsuLibAnalyzersIncludeGodotTextResources)' == ''">true</RitsuLibAnalyzersIncludeGodotTextResources>
+        <RitsuLibAnalyzersAdditionalFilesExclude>$(MSBuildProjectDirectory)\bin\**;$(MSBuildProjectDirectory)\obj\**;$(MSBuildProjectDirectory)\.git\**;$(MSBuildProjectDirectory)\.godot\**</RitsuLibAnalyzersAdditionalFilesExclude>
+    </PropertyGroup>
+
     <ItemGroup>
         <Analyzer
                 Include="$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\Nothing.STS2RitsuLib.ModAnalyzers.dll"
                 Condition="Exists('$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\Nothing.STS2RitsuLib.ModAnalyzers.dll')" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(RitsuLibAnalyzersAutoAdditionalFiles)' == 'true'">
+        <AdditionalFiles
+                Include="$(MSBuildProjectDirectory)\**\mod_manifest.json"
+                Exclude="$(RitsuLibAnalyzersAdditionalFilesExclude)"
+                Visible="false" />
+        <AdditionalFiles
+                Include="$(MSBuildProjectDirectory)\**\localization\**\*.json"
+                Exclude="$(RitsuLibAnalyzersAdditionalFilesExclude)"
+                Visible="false" />
+        <AdditionalFiles
+                Include="$(MSBuildProjectDirectory)\**\*.tscn;$(MSBuildProjectDirectory)\**\*.tres;$(MSBuildProjectDirectory)\**\*.theme.json;$(MSBuildProjectDirectory)\**\*.guids.txt"
+                Exclude="$(RitsuLibAnalyzersAdditionalFilesExclude)"
+                Visible="false"
+                Condition="'$(RitsuLibAnalyzersIncludeGodotTextResources)' == 'true'" />
+        <AdditionalFiles
+                Include="$(MSBuildProjectDirectory)\**\*.png;$(MSBuildProjectDirectory)\**\*.jpg;$(MSBuildProjectDirectory)\**\*.jpeg;$(MSBuildProjectDirectory)\**\*.webp;$(MSBuildProjectDirectory)\**\*.svg;$(MSBuildProjectDirectory)\**\*.ogg;$(MSBuildProjectDirectory)\**\*.wav;$(MSBuildProjectDirectory)\**\*.mp3;$(MSBuildProjectDirectory)\**\*.bank;$(MSBuildProjectDirectory)\**\*.res;$(MSBuildProjectDirectory)\**\*.material;$(MSBuildProjectDirectory)\**\*.gdshader;$(MSBuildProjectDirectory)\**\*.theme"
+                Exclude="$(RitsuLibAnalyzersAdditionalFilesExclude)"
+                Visible="false"
+                Condition="'$(RitsuLibAnalyzersIncludeAssets)' == 'true'" />
     </ItemGroup>
 </Project>
