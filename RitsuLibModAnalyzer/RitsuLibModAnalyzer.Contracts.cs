@@ -332,10 +332,28 @@ public sealed partial class RitsuLibModAnalyzer
             if (methodName == "Register" && method?.ContainingType?.Name == "RuntimeHotkeyService")
             {
                 MarkUsesRitsuLib();
-                var binding = GetInvocationStringArgument(invocation, method, "bindingText", 0, context.SemanticModel, context.CancellationToken);
-                if (!IsPlausibleHotkey(binding))
+                var firstArg = FindInvocationArgument(invocation, method, "bindingText", 0);
+                if (firstArg == null)
+                    return;
+
+                var elements = GetArrayElementExpressions(firstArg.Expression);
+                if (elements.Count > 0)
+                {
+                    foreach (var element in elements)
+                    {
+                        var binding = GetConstantString(element, context.SemanticModel, context.CancellationToken);
+                        if (!IsPlausibleHotkey(binding))
+                            ReportContract(context, RitsuLibDiagnostics.RuntimeHelperRule, element.GetLocation(),
+                                RitsuLibUiText.HotkeyBindingInvalid(binding ?? string.Empty));
+                    }
+
+                    return;
+                }
+
+                var singleBinding = GetConstantString(firstArg.Expression, context.SemanticModel, context.CancellationToken);
+                if (!IsPlausibleHotkey(singleBinding))
                     ReportContract(context, RitsuLibDiagnostics.RuntimeHelperRule, invocation.GetLocation(),
-                        RitsuLibUiText.HotkeyBindingInvalid(binding ?? string.Empty));
+                        RitsuLibUiText.HotkeyBindingInvalid(singleBinding ?? string.Empty));
             }
         }
 
@@ -1689,6 +1707,25 @@ public sealed partial class RitsuLibModAnalyzer
 
             var parts = binding!.Split('+');
             return parts.Length > 0 && parts.All(part => !string.IsNullOrWhiteSpace(part));
+        }
+
+        private static IReadOnlyList<ExpressionSyntax> GetArrayElementExpressions(ExpressionSyntax expression)
+        {
+            var unwrapped = Unwrap(expression);
+            if (unwrapped is ArrayCreationExpressionSyntax arrayCreation &&
+                arrayCreation.Initializer != null)
+                return arrayCreation.Initializer.Expressions;
+
+            if (unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray)
+                return implicitArray.Initializer.Expressions;
+
+            if (unwrapped is CollectionExpressionSyntax collection)
+                return collection.Elements
+                    .OfType<ExpressionElementSyntax>()
+                    .Select(element => element.Expression)
+                    .ToArray();
+
+            return Array.Empty<ExpressionSyntax>();
         }
 
         private static bool Implements(INamedTypeSymbol type, string interfaceName)

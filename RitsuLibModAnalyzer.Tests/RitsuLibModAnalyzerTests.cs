@@ -820,6 +820,43 @@ public sealed class RitsuLibModAnalyzerTests
         Assert.Contains("TODO RitsuLib analyzer:", text);
     }
 
+    [Fact]
+    public async Task HotkeyArrayBindingDoesNotTriggerRitsu015()
+    {
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RuntimeHotkeyService.Register(
+                        ["F5", "Ctrl+Shift+R"],
+                        () => { },
+                        new RuntimeHotkeyOptions { Id = "my_mod_refresh" });
+                }
+                """));
+
+        var diagnostics = await AnalyzeProjectAsync(project);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU015");
+    }
+
+    [Fact]
+    public async Task HotkeyArrayWithInvalidElementTriggersRitsu015()
+    {
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RuntimeHotkeyService.Register(
+                        ["F5", "Ctrl++"],
+                        () => { },
+                        new RuntimeHotkeyOptions { Id = "my_mod_refresh" });
+                }
+                """));
+
+        var diagnostics = await AnalyzeProjectAsync(project);
+        var ritsu015 = Assert.Single(diagnostics.Where(d => d.Id == "RITSU015"));
+        Assert.Contains("Ctrl++", ritsu015.GetMessage());
+    }
+
     private static AdditionalText CompleteCardKeywordJson(string language, string id)
     {
         return AdditionalJson($@"C:\mod\localization\{language}\card_keywords.json", $$"""
@@ -1382,6 +1419,7 @@ public sealed class RitsuLibModAnalyzerTests
                 public static class RuntimeHotkeyService
                 {
                     public static void Register(string bindingText) { }
+                    public static void Register(string[] bindings, Action callback, RuntimeHotkeyOptions? options = null) { }
                 }
             }
 
