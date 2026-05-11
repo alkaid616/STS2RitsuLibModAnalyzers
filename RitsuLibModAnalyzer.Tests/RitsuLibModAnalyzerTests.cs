@@ -575,6 +575,7 @@ public sealed class RitsuLibModAnalyzerTests
     [Fact]
     public async Task ReportsContentPackApplySettingsAndDataStoreDiagnostics()
     {
+        using var culture = UseCulture("en-US");
         var diagnostics = await AnalyzeAsync(
             Source("""
                 public sealed class CardPool { }
@@ -612,6 +613,7 @@ public sealed class RitsuLibModAnalyzerTests
     [Fact]
     public async Task ReportsPatchResourceAudioAndRuntimeDiagnostics()
     {
+        using var culture = UseCulture("en-US");
         var diagnostics = await AnalyzeAsync(
             Source("""
                 public sealed class PatchOwner : IPatchMethod { }

@@ -366,4 +366,179 @@ internal static class RitsuLibUiText
     {
         return IsChinese ? $"迁移到 {newMethod}" : $"Migrate to {newMethod}";
     }
+
+    // RITSU009: Settings contract messages
+    public static string SettingsMaxLengthNegative =>
+        IsChinese ? "ModSettingsStringAttribute.MaxLength 不能为负数。" : "ModSettingsStringAttribute.MaxLength cannot be negative.";
+
+    public static string SettingsCallbackNotFound(string methodName, string typeName) =>
+        IsChinese
+            ? $"Settings 回调方法 '{methodName}' 在 '{typeName}' 上未找到。"
+            : $"Settings callback method '{methodName}' was not found on '{typeName}'.";
+
+    public static string SettingsSectionIdEmpty =>
+        IsChinese ? "Settings section id 不能为空。" : "Settings section id cannot be empty.";
+
+    public static string SettingsSectionDuplicate(string sectionId, string pageId) =>
+        IsChinese
+            ? $"页面 '{pageId}' 上存在重复的 section id '{sectionId}'。"
+            : $"Duplicate settings section id '{sectionId}' on page '{pageId}'.";
+
+    public static string SettingsEntryIdEmpty =>
+        IsChinese ? "Settings entry id 不能为空。" : "Settings entry id cannot be empty.";
+
+    public static string SettingsEntryNoSection(string entryId) =>
+        IsChinese
+            ? $"Settings entry '{entryId}' 无法匹配到任何 section。"
+            : $"Settings entry '{entryId}' could not be matched to a section.";
+
+    public static string SettingsChoiceEmpty =>
+        IsChinese ? "Settings choice 应至少提供一个选项。" : "Settings choice entries should provide at least one option.";
+
+    public static string SettingsMinMustBeLessThanMax(string label) =>
+        IsChinese
+            ? $"{label} 最小值必须小于最大值。"
+            : $"{label} min must be less than max.";
+
+    public static string SettingsStepMustBePositive(string label) =>
+        IsChinese
+            ? $"{label} 步长必须大于零。"
+            : $"{label} step must be greater than zero.";
+
+    public static string SettingsButtonUseHostParamCount =>
+        IsChinese
+            ? "ModSettingsButtonAttribute.UseHostContext 要求恰好一个 host-context 参数。"
+            : "ModSettingsButtonAttribute.UseHostContext expects exactly one host-context parameter.";
+
+    public static string SettingsButtonShouldBeParameterless =>
+        IsChinese
+            ? "ModSettingsButtonAttribute 方法应无参数，除非 UseHostContext 为 true。"
+            : "ModSettingsButtonAttribute methods should be parameterless unless UseHostContext is true.";
+
+    // RITSU010: DataStore contract messages
+    public static string DataStoreKeyEmpty =>
+        IsChinese ? "ModDataStore.Register<T> 要求非空 key。" : "ModDataStore.Register<T> requires a non-empty key.";
+
+    public static string DataStoreFileNameEmpty =>
+        IsChinese ? "ModDataStore.Register<T> 要求非空 fileName。" : "ModDataStore.Register<T> requires a non-empty fileName.";
+
+    public static string DataStoreFileNameIsPath(string fileName) =>
+        IsChinese
+            ? $"ModDataStore fileName '{fileName}' 应为文件名而非路径。"
+            : $"ModDataStore fileName '{fileName}' should be a file name segment, not a path.";
+
+    public static string DataStoreFileNameMissingJson(string fileName) =>
+        IsChinese
+            ? $"ModDataStore fileName '{fileName}' 通常应以 .json 结尾。"
+            : $"ModDataStore fileName '{fileName}' should normally end with .json.";
+
+    public static string DataStoreMigrationRequiresConfig =>
+        IsChinese
+            ? "ModDataStore migrations 要求提供包含当前 schema 版本的 migrationConfig。"
+            : "ModDataStore migrations require a migrationConfig with the current schema version.";
+
+    // RITSU011: Patch contract messages
+    public static string PatchMethodMissingPatchId(string typeName) =>
+        IsChinese
+            ? $"IPatchMethod 类型 '{typeName}' 必须声明静态 PatchId。"
+            : $"IPatchMethod type '{typeName}' must declare static PatchId.";
+
+    public static string PatchMethodMissingGetTargets(string typeName) =>
+        IsChinese
+            ? $"IPatchMethod 类型 '{typeName}' 必须声明静态 GetTargets()。"
+            : $"IPatchMethod type '{typeName}' must declare static GetTargets().";
+
+    public static string ModPatchesMissingAddTo(string typeName) =>
+        IsChinese
+            ? $"IModPatches 类型 '{typeName}' 必须声明静态 AddTo(ModPatcher patcher)。"
+            : $"IModPatches type '{typeName}' must declare static AddTo(ModPatcher patcher).";
+
+    // RITSU012: Patch target messages
+    public static string DynamicPatchFromMethodNotFound(string methodName, string typeName) =>
+        IsChinese
+            ? $"DynamicPatchBuilder.FromMethod 在 '{typeName}' 上未找到静态方法 '{methodName}'。"
+            : $"DynamicPatchBuilder.FromMethod could not find static method '{methodName}' on '{typeName}'.";
+
+    public static string DynamicPatchTargetNotFound(string methodName, string typeName, string targetName) =>
+        IsChinese
+            ? $"DynamicPatchBuilder.{methodName} 目标 '{typeName}.{targetName}' 未找到。"
+            : $"DynamicPatchBuilder.{methodName} target '{typeName}.{targetName}' was not found.";
+
+    public static string ModPatchTargetMethodNotFound(string typeName, string methodName) =>
+        IsChinese
+            ? $"ModPatchTarget 目标方法 '{typeName}.{methodName}' 未找到。"
+            : $"ModPatchTarget target method '{typeName}.{methodName}' was not found.";
+
+    // RITSU013: Resource path messages
+    public static string ResourcePathMissingPrefix(string value) =>
+        IsChinese
+            ? $"资源路径 '{value}' 应使用 res:// 或 user:// 前缀。"
+            : $"Resource path '{value}' should use res:// or user://.";
+
+    public static string ResourcePathNotFound(string value) =>
+        IsChinese
+            ? $"资源路径 '{value}' 在 analyzer AdditionalFiles 中未找到。"
+            : $"Resource path '{value}' was not found in analyzer AdditionalFiles.";
+
+    // RITSU014: Audio string messages
+    public static string FmodBusPathPrefix(string value) =>
+        IsChinese
+            ? $"FMOD bus 路径 '{value}' 应以 bus:/ 开头。"
+            : $"FMOD bus path '{value}' should start with bus:/.";
+
+    public static string FmodEventPathPrefix(string value) =>
+        IsChinese
+            ? $"FMOD event 路径 '{value}' 应以 event:/ 或 snapshot:/ 开头。"
+            : $"FMOD event path '{value}' should start with event:/ or snapshot:/.";
+
+    public static string FmodGuidInvalid(string value) =>
+        IsChinese
+            ? $"FMOD GUID 字符串 '{value}' 不是有效的 GUID 格式。"
+            : $"FMOD GUID string '{value}' is not a valid GUID shape.";
+
+    public static string FmodBankMissingExtension(string value) =>
+        IsChinese
+            ? $"FMOD bank 资源 '{value}' 应以 .bank 结尾。"
+            : $"FMOD bank resource '{value}' should end with .bank.";
+
+    // RITSU015: Runtime helper messages
+    public static string FreePlayBindingIdEmpty =>
+        IsChinese ? "RegisterFreePlayBinding 要求稳定的非空 binding id。" : "RegisterFreePlayBinding requires a stable non-empty binding id.";
+
+    public static string HotkeyBindingInvalid(string binding) =>
+        IsChinese
+            ? $"Runtime hotkey 绑定 '{binding}' 字面量格式无效。"
+            : $"Runtime hotkey binding '{binding}' has an invalid literal shape.";
+
+    public static string HotkeyOptionsIdEmpty =>
+        IsChinese ? "RuntimeHotkeyOptions.Id 应为稳定的非空 id。" : "RuntimeHotkeyOptions.Id should be a stable non-empty id.";
+
+    // RITSU019: AudioSource path shape messages
+    public static string AudioSourceEventPrefix(string value) =>
+        IsChinese
+            ? $"AudioSource.Event 路径 '{value}' 应以 event:/ 开头。"
+            : $"AudioSource.Event path '{value}' should start with event:/.";
+
+    public static string AudioSourceSnapshotPrefix(string value) =>
+        IsChinese
+            ? $"AudioSource.Snapshot 路径 '{value}' 应以 snapshot:/ 开头。"
+            : $"AudioSource.Snapshot path '{value}' should start with snapshot:/.";
+
+    public static string AudioSourceGuidInvalid(string value) =>
+        IsChinese
+            ? $"AudioSource.Guid 字符串 '{value}' 不是有效的 GUID 格式。"
+            : $"AudioSource.Guid string '{value}' is not a valid GUID format.";
+
+    // RITSU020: ModInterop shape messages
+    public static string ModInteropRequiresModId =>
+        IsChinese ? "[ModInterop] 要求非空的目标 mod id。" : "[ModInterop] requires a non-empty target mod id.";
+
+    public static string ModInteropDiscouragedFormat(string modId) =>
+        IsChinese
+            ? $"[ModInterop] 目标 mod id '{modId}' 格式不推荐。"
+            : $"[ModInterop] target mod id '{modId}' has a discouraged format.";
+
+    // RITSU023: InteropTarget shape messages
+    public static string InteropTargetRequiresModInterop =>
+        IsChinese ? "[InteropTarget] 应在 [ModInterop] 类中使用。" : "[InteropTarget] should be used within a [ModInterop] class.";
 }

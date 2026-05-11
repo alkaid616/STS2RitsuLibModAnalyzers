@@ -218,7 +218,7 @@ public sealed partial class RitsuLibModAnalyzer
             if (string.IsNullOrWhiteSpace(key))
             {
                 ReportContract(context, RitsuLibDiagnostics.DataStoreContractRule, invocation.GetLocation(),
-                    "ModDataStore.Register<T> requires a non-empty key.");
+                    RitsuLibUiText.DataStoreKeyEmpty);
             }
             else
             {
@@ -228,16 +228,16 @@ public sealed partial class RitsuLibModAnalyzer
             if (string.IsNullOrWhiteSpace(fileName))
             {
                 ReportContract(context, RitsuLibDiagnostics.DataStoreContractRule, invocation.GetLocation(),
-                    "ModDataStore.Register<T> requires a non-empty fileName.");
+                    RitsuLibUiText.DataStoreFileNameEmpty);
             }
             else
             {
                 if (fileName!.IndexOfAny(new[] { '/', '\\' }) >= 0)
                     ReportContract(context, RitsuLibDiagnostics.DataStoreContractRule, invocation.GetLocation(),
-                        $"ModDataStore fileName '{fileName}' should be a file name segment, not a path.");
+                        RitsuLibUiText.DataStoreFileNameIsPath(fileName!));
                 if (!fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                     ReportContract(context, RitsuLibDiagnostics.DataStoreContractRule, invocation.GetLocation(),
-                        $"ModDataStore fileName '{fileName}' should normally end with .json.");
+                        RitsuLibUiText.DataStoreFileNameMissingJson(fileName!));
             }
 
             var migrationConfig = FindInvocationArgument(invocation, method, "migrationConfig", 5);
@@ -246,7 +246,7 @@ public sealed partial class RitsuLibModAnalyzer
                 (migrationConfig == null || IsNullLiteral(migrationConfig.Expression)))
             {
                 ReportContract(context, RitsuLibDiagnostics.DataStoreContractRule, migrations.GetLocation(),
-                    "ModDataStore migrations require a migrationConfig with the current schema version.");
+                    RitsuLibUiText.DataStoreMigrationRequiresConfig);
             }
 
             if (!string.IsNullOrWhiteSpace(key))
@@ -323,7 +323,7 @@ public sealed partial class RitsuLibModAnalyzer
                 var bindingId = GetInvocationStringArgument(invocation, method, "bindingId", 0, context.SemanticModel, context.CancellationToken);
                 if (string.IsNullOrWhiteSpace(bindingId))
                     ReportContract(context, RitsuLibDiagnostics.RuntimeHelperRule, invocation.GetLocation(),
-                        "RegisterFreePlayBinding requires a stable non-empty binding id.");
+                        RitsuLibUiText.FreePlayBindingIdEmpty);
                 else
                     ReportIdShapeIfNeeded(context, invocation.GetLocation(), "free-play binding id", bindingId!);
                 return;
@@ -335,7 +335,7 @@ public sealed partial class RitsuLibModAnalyzer
                 var binding = GetInvocationStringArgument(invocation, method, "bindingText", 0, context.SemanticModel, context.CancellationToken);
                 if (!IsPlausibleHotkey(binding))
                     ReportContract(context, RitsuLibDiagnostics.RuntimeHelperRule, invocation.GetLocation(),
-                        $"Runtime hotkey binding '{binding}' has an invalid literal shape.");
+                        RitsuLibUiText.HotkeyBindingInvalid(binding ?? string.Empty));
             }
         }
 
@@ -765,7 +765,7 @@ public sealed partial class RitsuLibModAnalyzer
                 var maxLength = GetAttributeNamedInt(attribute, context.SemanticModel, "MaxLength", context.CancellationToken);
                 if (maxLength < 0)
                     ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, attribute.GetLocation(),
-                        "ModSettingsStringAttribute.MaxLength cannot be negative.");
+                        RitsuLibUiText.SettingsMaxLengthNegative);
             }
         }
 
@@ -788,7 +788,7 @@ public sealed partial class RitsuLibModAnalyzer
                     continue;
 
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, attribute.GetLocation(),
-                    $"Settings callback method '{methodName}' was not found on '{symbol.Name}'.",
+                    RitsuLibUiText.SettingsCallbackNotFound(methodName!, symbol.Name),
                     Properties(
                         (RitsuLibDiagnosticProperties.StubKind, "SettingsCallback"),
                         (RitsuLibDiagnosticProperties.TypeName, symbol.Name),
@@ -837,7 +837,7 @@ public sealed partial class RitsuLibModAnalyzer
             if (string.IsNullOrWhiteSpace(sectionId))
             {
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, location,
-                    "Settings section id cannot be empty.");
+                    RitsuLibUiText.SettingsSectionIdEmpty);
                 return;
             }
 
@@ -857,7 +857,7 @@ public sealed partial class RitsuLibModAnalyzer
 
             if (duplicate)
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, location,
-                    $"Duplicate settings section id '{sectionId}' on page '{page.PageId}'.");
+                    RitsuLibUiText.SettingsSectionDuplicate(sectionId!, page.PageId));
         }
 
         private void RegisterSettingsEntry(
@@ -882,14 +882,14 @@ public sealed partial class RitsuLibModAnalyzer
             if (string.IsNullOrWhiteSpace(entryId))
             {
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, location,
-                    "Settings entry id cannot be empty.");
+                    RitsuLibUiText.SettingsEntryIdEmpty);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(sectionId))
             {
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, location,
-                    $"Settings entry '{entryId}' could not be matched to a section.");
+                    RitsuLibUiText.SettingsEntryNoSection(entryId!));
                 return;
             }
 
@@ -951,7 +951,7 @@ public sealed partial class RitsuLibModAnalyzer
                 return;
 
             ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, options.GetLocation(),
-                "Settings choice entries should provide at least one option.");
+                RitsuLibUiText.SettingsChoiceEmpty);
         }
 
         private void AnalyzeNumericRange(
@@ -964,10 +964,10 @@ public sealed partial class RitsuLibModAnalyzer
         {
             if (min.HasValue && max.HasValue && min.Value >= max.Value)
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, location,
-                    $"{label} min must be less than max.");
+                    RitsuLibUiText.SettingsMinMustBeLessThanMax(label));
             if (step.HasValue && step.Value <= 0)
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, location,
-                    $"{label} step must be greater than zero.");
+                    RitsuLibUiText.SettingsStepMustBePositive(label));
         }
 
         private void AnalyzeSettingsButtonMethod(
@@ -979,12 +979,12 @@ public sealed partial class RitsuLibModAnalyzer
             if (useHost == true && method.ParameterList.Parameters.Count != 1)
             {
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, method.Identifier.GetLocation(),
-                    "ModSettingsButtonAttribute.UseHostContext expects exactly one host-context parameter.");
+                    RitsuLibUiText.SettingsButtonUseHostParamCount);
             }
             else if (useHost != true && method.ParameterList.Parameters.Count != 0)
             {
                 ReportContract(context, RitsuLibDiagnostics.SettingsContractRule, method.Identifier.GetLocation(),
-                    "ModSettingsButtonAttribute methods should be parameterless unless UseHostContext is true.");
+                    RitsuLibUiText.SettingsButtonShouldBeParameterless);
             }
         }
 
@@ -996,7 +996,7 @@ public sealed partial class RitsuLibModAnalyzer
             if (!HasStaticProperty(type, "PatchId"))
             {
                 ReportContract(context, RitsuLibDiagnostics.PatchContractRule, declaration.Identifier.GetLocation(),
-                    $"IPatchMethod type '{type.Name}' must declare static PatchId.",
+                    RitsuLibUiText.PatchMethodMissingPatchId(type.Name),
                     Properties(
                         (RitsuLibDiagnosticProperties.StubKind, "PatchMethod"),
                         (RitsuLibDiagnosticProperties.TypeName, type.Name)));
@@ -1005,7 +1005,7 @@ public sealed partial class RitsuLibModAnalyzer
             if (!HasStaticMethod(type, "GetTargets"))
             {
                 ReportContract(context, RitsuLibDiagnostics.PatchContractRule, declaration.Identifier.GetLocation(),
-                    $"IPatchMethod type '{type.Name}' must declare static GetTargets().",
+                    RitsuLibUiText.PatchMethodMissingGetTargets(type.Name),
                     Properties(
                         (RitsuLibDiagnosticProperties.StubKind, "PatchMethod"),
                         (RitsuLibDiagnosticProperties.TypeName, type.Name)));
@@ -1021,7 +1021,7 @@ public sealed partial class RitsuLibModAnalyzer
                 return;
 
             ReportContract(context, RitsuLibDiagnostics.PatchContractRule, declaration.Identifier.GetLocation(),
-                $"IModPatches type '{type.Name}' must declare static AddTo(ModPatcher patcher).",
+                RitsuLibUiText.ModPatchesMissingAddTo(type.Name),
                 Properties(
                     (RitsuLibDiagnosticProperties.StubKind, "ModPatches"),
                     (RitsuLibDiagnosticProperties.TypeName, type.Name)));
@@ -1045,7 +1045,7 @@ public sealed partial class RitsuLibModAnalyzer
                 return;
 
             ReportContract(context, RitsuLibDiagnostics.PatchTargetRule, invocation.GetLocation(),
-                $"DynamicPatchBuilder.FromMethod could not find static method '{methodName}' on '{type.Name}'.",
+                RitsuLibUiText.DynamicPatchFromMethodNotFound(methodName!, type.Name),
                 Properties(
                     (RitsuLibDiagnosticProperties.StubKind, "PatchTargetMethod"),
                     (RitsuLibDiagnosticProperties.TypeName, type.Name),
@@ -1072,7 +1072,7 @@ public sealed partial class RitsuLibModAnalyzer
                 return;
 
             ReportContract(context, RitsuLibDiagnostics.PatchTargetRule, invocation.GetLocation(),
-                $"DynamicPatchBuilder.{methodName} target '{type.Name}.{targetName}' was not found.",
+                RitsuLibUiText.DynamicPatchTargetNotFound(methodName, type.Name, targetName!),
                 Properties(
                     (RitsuLibDiagnosticProperties.StubKind, methodName == "AddPropertyGetter" ? "PatchTargetProperty" : "PatchTargetMethod"),
                     (RitsuLibDiagnosticProperties.TypeName, type.Name),
@@ -1094,7 +1094,7 @@ public sealed partial class RitsuLibModAnalyzer
                 return;
 
             ReportContract(context, RitsuLibDiagnostics.PatchTargetRule, creation.GetLocation(),
-                $"ModPatchTarget target method '{type.Name}.{methodName}' was not found.",
+                RitsuLibUiText.ModPatchTargetMethodNotFound(type.Name, methodName!),
                 Properties(
                     (RitsuLibDiagnosticProperties.StubKind, "PatchTargetMethod"),
                     (RitsuLibDiagnosticProperties.TypeName, type.Name),
@@ -1128,7 +1128,7 @@ public sealed partial class RitsuLibModAnalyzer
                 if (LooksLikeFileResource(value))
                 {
                     ReportContract(context, RitsuLibDiagnostics.ResourcePathRule, location,
-                        $"Resource path '{value}' should use res:// or user://.",
+                        RitsuLibUiText.ResourcePathMissingPrefix(value),
                         Properties(
                             (RitsuLibDiagnosticProperties.StubKind, "ResourcePath"),
                             (RitsuLibDiagnosticProperties.ResourcePath, value)));
@@ -1140,7 +1140,7 @@ public sealed partial class RitsuLibModAnalyzer
             if (_additionalFiles.HasAssetIndex && !_additionalFiles.ResourceExists(value))
             {
                 ReportContract(context, RitsuLibDiagnostics.ResourcePathRule, location,
-                    $"Resource path '{value}' was not found in analyzer AdditionalFiles.",
+                    RitsuLibUiText.ResourcePathNotFound(value),
                     Properties(
                         (RitsuLibDiagnosticProperties.StubKind, "ResourcePath"),
                         (RitsuLibDiagnosticProperties.ResourcePath, value)));
@@ -1157,7 +1157,7 @@ public sealed partial class RitsuLibModAnalyzer
                 !value.StartsWith("bus:/", StringComparison.OrdinalIgnoreCase))
             {
                 ReportContract(context, RitsuLibDiagnostics.AudioStringRule, location,
-                    $"FMOD bus path '{value}' should start with bus:/.");
+                    RitsuLibUiText.FmodBusPathPrefix(value));
             }
 
             if ((methodName.Contains("Event", StringComparison.OrdinalIgnoreCase) || methodName == "Event") &&
@@ -1166,7 +1166,7 @@ public sealed partial class RitsuLibModAnalyzer
                 !value.StartsWith("snapshot:/", StringComparison.OrdinalIgnoreCase))
             {
                 ReportContract(context, RitsuLibDiagnostics.AudioStringRule, location,
-                    $"FMOD event path '{value}' should start with event:/ or snapshot:/.");
+                    RitsuLibUiText.FmodEventPathPrefix(value));
             }
 
             if (methodName.Contains("Guid", StringComparison.OrdinalIgnoreCase) &&
@@ -1175,12 +1175,12 @@ public sealed partial class RitsuLibModAnalyzer
                 !FmodGuidRegex.IsMatch(value))
             {
                 ReportContract(context, RitsuLibDiagnostics.AudioStringRule, location,
-                    $"FMOD GUID string '{value}' is not a valid GUID shape.");
+                    RitsuLibUiText.FmodGuidInvalid(value));
             }
 
             if (methodName.Contains("Bank", StringComparison.OrdinalIgnoreCase) && !value.EndsWith(".bank", StringComparison.OrdinalIgnoreCase))
                 ReportContract(context, RitsuLibDiagnostics.AudioStringRule, location,
-                    $"FMOD bank resource '{value}' should end with .bank.");
+                    RitsuLibUiText.FmodBankMissingExtension(value));
         }
 
         private void AnalyzeRuntimeHotkeyOptionsCreation(BaseObjectCreationExpressionSyntax creation, SyntaxNodeAnalysisContext context)
@@ -1197,7 +1197,7 @@ public sealed partial class RitsuLibModAnalyzer
                 var value = GetConstantString(expression.Right, context.SemanticModel, context.CancellationToken);
                 if (string.IsNullOrWhiteSpace(value))
                     ReportContract(context, RitsuLibDiagnostics.RuntimeHelperRule, expression.GetLocation(),
-                        "RuntimeHotkeyOptions.Id should be a stable non-empty id.");
+                        RitsuLibUiText.HotkeyOptionsIdEmpty);
                 else
                     ReportIdShapeIfNeeded(context, expression.GetLocation(), "runtime hotkey id", value);
             }
@@ -1247,7 +1247,7 @@ public sealed partial class RitsuLibModAnalyzer
             if (methodName == "Event" && !value!.StartsWith("event:/", StringComparison.OrdinalIgnoreCase))
             {
                 ReportContract(context, RitsuLibDiagnostics.AudioSourcePathShapeRule, invocation.GetLocation(),
-                    $"AudioSource.Event path '{value}' should start with event:/.",
+                    RitsuLibUiText.AudioSourceEventPrefix(value!),
                     Properties(
                         (RitsuLibDiagnosticProperties.SourceMethod, "Event"),
                         (RitsuLibDiagnosticProperties.ExpectedPrefix, "event:/")));
@@ -1255,7 +1255,7 @@ public sealed partial class RitsuLibModAnalyzer
             else if (methodName == "Snapshot" && !value!.StartsWith("snapshot:/", StringComparison.OrdinalIgnoreCase))
             {
                 ReportContract(context, RitsuLibDiagnostics.AudioSourcePathShapeRule, invocation.GetLocation(),
-                    $"AudioSource.Snapshot path '{value}' should start with snapshot:/.",
+                    RitsuLibUiText.AudioSourceSnapshotPrefix(value!),
                     Properties(
                         (RitsuLibDiagnosticProperties.SourceMethod, "Snapshot"),
                         (RitsuLibDiagnosticProperties.ExpectedPrefix, "snapshot:/")));
@@ -1263,7 +1263,7 @@ public sealed partial class RitsuLibModAnalyzer
             else if (methodName == "Guid" && !FmodGuidRegex.IsMatch(value!))
             {
                 ReportContract(context, RitsuLibDiagnostics.AudioSourcePathShapeRule, invocation.GetLocation(),
-                    $"AudioSource.Guid string '{value}' is not a valid GUID format.",
+                    RitsuLibUiText.AudioSourceGuidInvalid(value!),
                     Properties(
                         (RitsuLibDiagnosticProperties.SourceMethod, "Guid"),
                         (RitsuLibDiagnosticProperties.ExpectedPrefix, "GUID")));
@@ -1283,14 +1283,14 @@ public sealed partial class RitsuLibModAnalyzer
                 if (string.IsNullOrWhiteSpace(modId))
                 {
                     ReportContract(context, RitsuLibDiagnostics.ModInteropShapeRule, attribute.GetLocation(),
-                        "[ModInterop] requires a non-empty target mod id.");
+                        RitsuLibUiText.ModInteropRequiresModId);
                     return;
                 }
 
                 if (!RitsuLibSyntaxFacts.HasRecommendedIdShape(modId!))
                 {
                     ReportContract(context, RitsuLibDiagnostics.ModInteropShapeRule, attribute.GetLocation(),
-                        $"[ModInterop] target mod id '{modId}' has a discouraged format.");
+                        RitsuLibUiText.ModInteropDiscouragedFormat(modId!));
                 }
                 return;
             }
@@ -1309,7 +1309,7 @@ public sealed partial class RitsuLibModAnalyzer
                 if (!hasModInterop)
                 {
                     ReportContract(context, RitsuLibDiagnostics.InteropTargetShapeRule, attribute.GetLocation(),
-                        "[InteropTarget] should be used within a [ModInterop] class.");
+                        RitsuLibUiText.InteropTargetRequiresModInterop);
                 }
             }
         }
