@@ -1542,6 +1542,101 @@ public sealed class RitsuLibModAnalyzerTests
         return (await document.GetTextAsync()).ToString();
     }
 
+    [Fact]
+    public async Task JsonCodeFixAddsKeysToTargetLanguageFile()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\zhs\cards.json", "{}"));
+
+        var diagnostics = (await AnalyzeProjectAsync(project))
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .ToImmutableArray();
+
+        Assert.True(diagnostics.Length >= 2);
+
+        var engDiagnostic = diagnostics.First(d => d.GetMessage().Contains("eng/"));
+        var changed = await ApplyCodeFixAsync(project, engDiagnostic, "Add missing");
+
+        var engText = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", engText);
+        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
+    }
+
+    [Fact]
+    public async Task FixAllProviderReturnsActionForMultipleDiagnostics()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyCard { }
+
+                [RegisterCard(typeof(CardPool))]
+                public sealed class MyStrike { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"),
+            AdditionalFile(@"C:\mod\localization\zhs\cards.json", "{}"));
+
+        var diagnostics = (await AnalyzeProjectAsync(project))
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .ToImmutableArray();
+
+        Assert.True(diagnostics.Length >= 2);
+
+        var document = Assert.Single(project.Documents);
+        var provider = new RitsuLibLocalizationCodeFixProvider();
+        var fixAllProvider = provider.GetFixAllProvider();
+
+        var diagnosticIds = diagnostics.Select(d => d.Id).Distinct().ToImmutableArray();
+        var fixAllDiagnosticProvider = new FixAllDiagnosticProvider(diagnostics);
+        var fixAllContext = new FixAllContext(
+            document,
+            provider,
+            FixAllScope.Document,
+            diagnosticIds[0],
+            diagnosticIds,
+            fixAllDiagnosticProvider,
+            CancellationToken.None);
+
+        var fixAllAction = await fixAllProvider.GetFixAsync(fixAllContext);
+        Assert.NotNull(fixAllAction);
+        Assert.Contains("2 files", fixAllAction.Title);
+    }
+
+    private sealed class FixAllDiagnosticProvider : FixAllContext.DiagnosticProvider
+    {
+        private readonly ImmutableArray<Diagnostic> _diagnostics;
+
+        public FixAllDiagnosticProvider(ImmutableArray<Diagnostic> diagnostics)
+        {
+            _diagnostics = diagnostics;
+        }
+
+        public override Task<IEnumerable<Diagnostic>> GetAllDiagnosticsAsync(Project project, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IEnumerable<Diagnostic>>(_diagnostics);
+        }
+
+        public override Task<IEnumerable<Diagnostic>> GetDocumentDiagnosticsAsync(Document document, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IEnumerable<Diagnostic>>(
+                _diagnostics.Where(d => d.Location.IsInSource && d.Location.SourceTree?.FilePath == document.FilePath));
+        }
+
+        public override Task<IEnumerable<Diagnostic>> GetProjectDiagnosticsAsync(Project project, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IEnumerable<Diagnostic>>(
+                _diagnostics.Where(d => !d.Location.IsInSource));
+        }
+    }
+
     private sealed class InMemoryAdditionalText : AdditionalText
     {
         private readonly SourceText _text;

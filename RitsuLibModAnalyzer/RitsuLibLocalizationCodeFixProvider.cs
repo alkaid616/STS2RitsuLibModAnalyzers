@@ -25,7 +25,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
 
     public sealed override FixAllProvider GetFixAllProvider()
     {
-        return WellKnownFixAllProviders.BatchFixer;
+        return new RitsuLibLocalizationFixAllProvider();
     }
 
     public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
@@ -638,7 +638,12 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         {
             var document = FindAdditionalDocument(project, request.TargetPath);
             if (document == null)
+            {
+                var diskContent = ReadLocalizationFile(request.TargetPath, project);
+                if (diskContent != null && !CanPatchTopLevelObject(diskContent))
+                    return false;
                 continue;
+            }
 
             var text = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
             if (!CanPatchTopLevelObject(text.ToString()))
@@ -666,6 +671,9 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 ? string.Empty
                 : (await document.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString();
 
+            if (string.IsNullOrWhiteSpace(existingText))
+                existingText = ReadLocalizationFile(targetPath, project) ?? string.Empty;
+
             if (!CanPatchTopLevelObject(existingText))
                 continue;
 
@@ -676,7 +684,11 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 .OrderBy(entry => entry.Key, StringComparer.Ordinal)
                 .ToImmutableArray();
 
-            var updatedText = SourceText.From(AddEntriesToJsonObject(existingText, entries), Encoding.UTF8);
+            var updatedContent = AddEntriesToJsonObject(existingText, entries);
+            var updatedText = SourceText.From(updatedContent, Encoding.UTF8);
+
+            WriteLocalizationFile(targetPath, project, updatedContent);
+
             if (document != null)
             {
                 solution = solution.WithAdditionalDocumentText(document.Id, updatedText);
@@ -869,6 +881,101 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         }
 
         return builder.ToString();
+    }
+
+    private static string? ReadLocalizationFile(string targetPath, Project project)
+    {
+        try
+        {
+            var fullPath = ResolveFullPath(targetPath, project);
+            return File.Exists(fullPath) ? File.ReadAllText(fullPath, Encoding.UTF8) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteLocalizationFile(string targetPath, Project project, string content)
+    {
+        try
+        {
+            var fullPath = ResolveFullPath(targetPath, project);
+            var directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
+
+            File.WriteAllText(fullPath, content, new UTF8Encoding(false));
+        }
+        catch
+        {
+        }
+    }
+
+    private static string ResolveFullPath(string targetPath, Project project)
+    {
+        if (Path.IsPathRooted(targetPath))
+            return targetPath;
+
+        if (project.FilePath != null)
+        {
+            var projectDir = Path.GetDirectoryName(project.FilePath);
+            if (projectDir != null)
+                return Path.Combine(projectDir, targetPath);
+        }
+
+        return targetPath;
+    }
+
+    private sealed class RitsuLibLocalizationFixAllProvider : FixAllProvider
+    {
+        public override async Task<CodeAction?> GetFixAsync(FixAllContext fixAllContext)
+        {
+            var allRequests = new List<LocalizationFixRequest>();
+
+            if (fixAllContext.Scope == FixAllScope.Solution)
+            {
+                foreach (var project in fixAllContext.Solution.Projects)
+                {
+                    var diagnostics = await fixAllContext.GetAllDiagnosticsAsync(project).ConfigureAwait(false);
+                    CollectRequests(diagnostics, allRequests);
+                }
+            }
+            else
+            {
+                var diagnostics = await fixAllContext.GetAllDiagnosticsAsync(fixAllContext.Project).ConfigureAwait(false);
+                CollectRequests(diagnostics, allRequests);
+            }
+
+            if (allRequests.Count == 0)
+                return null;
+
+            var requestsArray = allRequests.Distinct().ToImmutableArray();
+            var targetProject = fixAllContext.Scope == FixAllScope.Solution
+                ? fixAllContext.Solution.Projects.FirstOrDefault() ?? fixAllContext.Project
+                : fixAllContext.Project;
+
+            return CodeAction.Create(
+                RitsuLibUiText.AddMissingKeysTitle(GetTargetLabel(requestsArray)),
+                _ => AddMissingKeysAsync(
+                    targetProject.Solution, targetProject.Id, requestsArray, CancellationToken.None),
+                "FixAllRitsuLibLocalizationKeys");
+        }
+
+        private static void CollectRequests(
+            ImmutableArray<Diagnostic> diagnostics,
+            List<LocalizationFixRequest> requests)
+        {
+            foreach (var diagnostic in diagnostics)
+            {
+                if (diagnostic.Id != RitsuLibDiagnostics.MissingLocalizationId)
+                    continue;
+
+                var request = ReadRequest(diagnostic);
+                if (request != null)
+                    requests.Add(request);
+            }
+        }
     }
 
     private sealed class LocalizationFixRequest
