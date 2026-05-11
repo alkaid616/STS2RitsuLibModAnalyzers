@@ -645,6 +645,70 @@ public sealed class RitsuLibModAnalyzerTests
     }
 
     [Fact]
+    public async Task ResPathAtProjectRootIsFoundInAdditionalFiles()
+    {
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://icon.svg");
+                }
+                """),
+            AdditionalFile(@"C:\mod\icon.svg", "<svg/>"));
+
+        var diagnostics = await AnalyzeProjectAsync(project);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU013");
+    }
+
+    [Fact]
+    public async Task ResPathUsesProjectRootRelativeSubpath()
+    {
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://Resources/sub/icon.png");
+                }
+                """),
+            AdditionalFile(@"C:\mod\Resources\sub\icon.png", ""));
+
+        var diagnostics = await AnalyzeProjectAsync(project);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RITSU013");
+    }
+
+    [Fact]
+    public async Task ResPathDoesNotMatchResourceMarkerRelativeSubpath()
+    {
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://sub/icon.png");
+                }
+                """),
+            AdditionalFile(@"C:\mod\Resources\sub\icon.png", ""));
+
+        var diagnostics = await AnalyzeProjectAsync(project);
+        Assert.Contains(diagnostics, d => d.Id == "RITSU013");
+    }
+
+    [Fact]
+    public async Task ResPathDoesNotMatchByFileNameOnly()
+    {
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://icon.svg");
+                }
+                """),
+            AdditionalFile(@"C:\mod\assets\icon.svg", "<svg/>"));
+
+        var diagnostics = await AnalyzeProjectAsync(project);
+        Assert.Contains(diagnostics, d => d.Id == "RITSU013");
+    }
+
+    [Fact]
     public async Task ApplyCodeFixAddsApplyToContentPackChain()
     {
         using var culture = UseCulture("en-US");
@@ -1442,15 +1506,21 @@ public sealed class RitsuLibModAnalyzerTests
             .Cast<AdditionalText>()
             .ToImmutableArray();
 
-        return await AnalyzeCompilationAsync(compilation!, additionalTexts);
+        return await AnalyzeCompilationAsync(
+            compilation!,
+            additionalTexts,
+            new InMemoryAnalyzerConfigOptionsProvider(@"C:\mod"));
     }
 
     private static async Task<ImmutableArray<Diagnostic>> AnalyzeCompilationAsync(
         Compilation compilation,
-        ImmutableArray<AdditionalText> additionalTexts)
+        ImmutableArray<AdditionalText> additionalTexts,
+        AnalyzerConfigOptionsProvider? analyzerConfigOptionsProvider = null)
     {
         var analyzer = new AnalyzerUnderTest();
-        var options = new AnalyzerOptions(additionalTexts);
+        var options = new AnalyzerOptions(
+            additionalTexts,
+            analyzerConfigOptionsProvider ?? new InMemoryAnalyzerConfigOptionsProvider(null));
         var compilationWithAnalyzers = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(analyzer),
             new CompilationWithAnalyzersOptions(options, onAnalyzerException: null, concurrentAnalysis: true, logAnalyzerExecutionTime: false, reportSuppressedDiagnostics: false));
@@ -1672,6 +1742,50 @@ public sealed class RitsuLibModAnalyzerTests
         public override SourceText GetText(CancellationToken cancellationToken = default)
         {
             return _document.GetTextAsync(cancellationToken).GetAwaiter().GetResult();
+        }
+    }
+
+    private sealed class InMemoryAnalyzerConfigOptionsProvider : AnalyzerConfigOptionsProvider
+    {
+        private readonly AnalyzerConfigOptions _globalOptions;
+
+        public InMemoryAnalyzerConfigOptionsProvider(string? projectDirectory)
+        {
+            Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(projectDirectory))
+                options["build_property.MSBuildProjectDirectory"] = projectDirectory!;
+
+            _globalOptions = new InMemoryAnalyzerConfigOptions(options);
+        }
+
+        public override AnalyzerConfigOptions GlobalOptions => _globalOptions;
+
+        public override AnalyzerConfigOptions GetOptions(SyntaxTree tree)
+        {
+            return Empty;
+        }
+
+        public override AnalyzerConfigOptions GetOptions(AdditionalText textFile)
+        {
+            return Empty;
+        }
+
+        private static AnalyzerConfigOptions Empty { get; } =
+            new InMemoryAnalyzerConfigOptions(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private sealed class InMemoryAnalyzerConfigOptions : AnalyzerConfigOptions
+    {
+        private readonly IReadOnlyDictionary<string, string> _options;
+
+        public InMemoryAnalyzerConfigOptions(IReadOnlyDictionary<string, string> options)
+        {
+            _options = options;
+        }
+
+        public override bool TryGetValue(string key, out string value)
+        {
+            return _options.TryGetValue(key, out value!);
         }
     }
 

@@ -24,7 +24,6 @@ internal sealed class RitsuLibAdditionalFileIndex
     private readonly Dictionary<string, Dictionary<string, string>> _tablePathsByLanguage;
     private readonly Dictionary<string, string> _i18NPathsByLanguage;
     private readonly HashSet<string> _assetRelativePaths;
-    private readonly HashSet<string> _assetFileNames;
     private readonly string[] _roots;
 
     private RitsuLibAdditionalFileIndex(
@@ -34,7 +33,6 @@ internal sealed class RitsuLibAdditionalFileIndex
         Dictionary<string, Dictionary<string, string>> tablePathsByLanguage,
         Dictionary<string, string> i18NPathsByLanguage,
         HashSet<string> assetRelativePaths,
-        HashSet<string> assetFileNames,
         List<string> roots,
         bool hasGodotTextResources)
     {
@@ -44,10 +42,9 @@ internal sealed class RitsuLibAdditionalFileIndex
         _tablePathsByLanguage = tablePathsByLanguage;
         _i18NPathsByLanguage = i18NPathsByLanguage;
         _assetRelativePaths = assetRelativePaths;
-        _assetFileNames = assetFileNames;
         _roots = roots.OrderBy(root => root, StringComparer.OrdinalIgnoreCase).ToArray();
         HasGodotTextResources = hasGodotTextResources;
-        HasAssetIndex = assetRelativePaths.Count > 0 || assetFileNames.Count > 0;
+        HasAssetIndex = assetRelativePaths.Count > 0;
         Languages = tableKeysByLanguage.Keys
             .Concat(i18NKeysByLanguage.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -67,10 +64,10 @@ internal sealed class RitsuLibAdditionalFileIndex
         Dictionary<string, Dictionary<string, string>> tablePathsByLanguage = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, string> i18NPathsByLanguage = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> assetRelativePaths = new(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> assetFileNames = new(StringComparer.OrdinalIgnoreCase);
         List<string> roots = new();
         ModManifestInfo manifest = ModManifestInfo.None;
         var hasGodotTextResources = false;
+        var projectDirectory = GetBuildProperty(context.Options, "MSBuildProjectDirectory");
 
         foreach (var file in context.Options.AdditionalFiles)
         {
@@ -78,7 +75,7 @@ internal sealed class RitsuLibAdditionalFileIndex
             if (IsIgnoredPath(path))
                 continue;
 
-            AddAssetPath(path, assetRelativePaths, assetFileNames);
+            AddAssetPath(path, projectDirectory, assetRelativePaths);
 
             var extension = Path.GetExtension(path);
             if (extension.Equals(".tscn", StringComparison.OrdinalIgnoreCase) ||
@@ -155,7 +152,6 @@ internal sealed class RitsuLibAdditionalFileIndex
             tablePathsByLanguage,
             i18NPathsByLanguage,
             assetRelativePaths,
-            assetFileNames,
             roots,
             hasGodotTextResources);
     }
@@ -201,7 +197,7 @@ internal sealed class RitsuLibAdditionalFileIndex
         if (_assetRelativePaths.Contains(relative))
             return true;
 
-        return _assetFileNames.Contains(Path.GetFileName(relative));
+        return false;
     }
 
     public static bool IsResourcePath(string value)
@@ -283,7 +279,7 @@ internal sealed class RitsuLibAdditionalFileIndex
                normalized.IndexOf("/.godot/", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private static void AddAssetPath(string path, HashSet<string> relativePaths, HashSet<string> fileNames)
+    private static void AddAssetPath(string path, string? projectDirectory, HashSet<string> relativePaths)
     {
         var extension = Path.GetExtension(path);
         if (!AssetExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase) &&
@@ -291,26 +287,10 @@ internal sealed class RitsuLibAdditionalFileIndex
             !path.EndsWith(".theme.json", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var normalized = path.Replace('\\', '/');
-        var addFileName = path.EndsWith(".guids.txt", StringComparison.OrdinalIgnoreCase) ||
-                          path.EndsWith(".theme.json", StringComparison.OrdinalIgnoreCase);
-        foreach (var marker in new[] { "/assets/", "/Resources/", "/resources/", "/Scenes/", "/scenes/", "/Audio/", "/audio/" })
-        {
-            var index = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-                continue;
+        if (!TryGetProjectRelativePath(path, projectDirectory, out var relativePath))
+            return;
 
-            addFileName = true;
-            relativePaths.Add(normalized.Substring(index + 1));
-            relativePaths.Add(normalized.Substring(index + marker.Length));
-        }
-
-        if (addFileName)
-        {
-            var fileName = Path.GetFileName(path);
-            if (!string.IsNullOrWhiteSpace(fileName))
-                fileNames.Add(fileName);
-        }
+        relativePaths.Add(relativePath);
     }
 
     private static string NormalizeResourcePath(string resourcePath)
@@ -322,6 +302,34 @@ internal sealed class RitsuLibAdditionalFileIndex
             text = text.Substring("user://".Length);
 
         return text.TrimStart('/');
+    }
+
+    private static string? GetBuildProperty(AnalyzerOptions options, string name)
+    {
+        return options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue($"build_property.{name}", out var value) &&
+               !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
+    }
+
+    private static bool TryGetProjectRelativePath(string path, string? projectDirectory, out string relativePath)
+    {
+        relativePath = string.Empty;
+        if (string.IsNullOrWhiteSpace(projectDirectory))
+            return false;
+
+        var root = Path.GetFullPath(projectDirectory!);
+        var fullPath = Path.GetFullPath(path);
+        var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) ||
+                                root.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+
+        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        relativePath = fullPath.Substring(rootWithSeparator.Length).Replace('\\', '/');
+        return !string.IsNullOrWhiteSpace(relativePath) && !relativePath.StartsWith("../", StringComparison.Ordinal);
     }
 
     private static string CombinePath(params string[] parts)
