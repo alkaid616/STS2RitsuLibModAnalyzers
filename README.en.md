@@ -119,18 +119,16 @@ Additionally, calls to RitsuLib APIs marked `[Obsolete]` (compiler CS0618) get m
 
 ## Local Development
 
-To test a locally built package, register a local package source:
+When testing local builds, `Pack` overwrites the same package version in the local NuGet global package cache by default.
 
-```powershell
-dotnet nuget add source C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\local-packages --name local-ritsulib-analyzers
-```
-
-Build and pack:
+Build, pack, and overwrite-install:
 
 ```powershell
 dotnet test C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzers.sln --no-restore
-dotnet build C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\STS2RitsuLib.ModAnalyzers.csproj -c Release
+dotnet msbuild C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\STS2RitsuLib.ModAnalyzers.csproj /t:Pack /p:Configuration=Release
 ```
+
+The default install path is `%USERPROFILE%\.nuget\packages`, and `NUGET_PACKAGES` is respected. Pass `/p:NuGetGlobalPackagesFolder=...` to override the destination, or `/p:InstallAnalyzerOnPack=false` to pack without installing.
 
 Manual publish command for nuget.org:
 

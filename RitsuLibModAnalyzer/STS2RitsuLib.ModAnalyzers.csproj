@@ -37,6 +37,8 @@
         <NuGetPushTimeoutSeconds Condition="'$(NuGetPushTimeoutSeconds)' == ''">300</NuGetPushTimeoutSeconds>
         <AllowNonReleaseNuGetPublish Condition="'$(AllowNonReleaseNuGetPublish)' == ''">false</AllowNonReleaseNuGetPublish>
         <InstallAnalyzerOnPack Condition="'$(InstallAnalyzerOnPack)' == ''">true</InstallAnalyzerOnPack>
+        <OverwriteAnalyzerInGlobalPackages Condition="'$(OverwriteAnalyzerInGlobalPackages)' == ''">true</OverwriteAnalyzerInGlobalPackages>
+        <NuGetGlobalPackagesFolder Condition="'$(NuGetGlobalPackagesFolder)' == '' and '$(NUGET_PACKAGES)' != ''">$(NUGET_PACKAGES)</NuGetGlobalPackagesFolder>
         <NuGetGlobalPackagesFolder Condition="'$(NuGetGlobalPackagesFolder)' == ''">$(USERPROFILE)\.nuget\packages</NuGetGlobalPackagesFolder>
         <LocalAnalyzerInstallProjectDir Condition="'$(LocalAnalyzerInstallProjectDir)' == ''">$(MSBuildProjectDirectory)\obj\AnalyzerGlobalCacheInstall</LocalAnalyzerInstallProjectDir>
         <LocalAnalyzerInstallProjectPath Condition="'$(LocalAnalyzerInstallProjectPath)' == ''">$(LocalAnalyzerInstallProjectDir)\AnalyzerGlobalCacheInstall.csproj</LocalAnalyzerInstallProjectPath>
@@ -69,7 +71,7 @@
                Text="Package file was not found: $(LocalAnalyzerPackagePath)" />
         <Message Importance="High" Text="Installing local analyzer package to NuGet global package cache: $(LocalAnalyzerGlobalPackageCachePath)" />
         <RemoveDir Directories="$(LocalAnalyzerGlobalPackageCachePath)"
-                   Condition="Exists('$(LocalAnalyzerGlobalPackageCachePath)')" />
+                   Condition="'$(OverwriteAnalyzerInGlobalPackages)' == 'true' and Exists('$(LocalAnalyzerGlobalPackageCachePath)')" />
         <MakeDir Directories="$(LocalAnalyzerInstallProjectDir)" />
         <ItemGroup>
             <_LocalAnalyzerInstallProjectLines Include="&lt;Project Sdk=&quot;Microsoft.NET.Sdk&quot;&gt;" />
@@ -84,7 +86,7 @@
         <WriteLinesToFile File="$(LocalAnalyzerInstallProjectPath)"
                           Lines="@(_LocalAnalyzerInstallProjectLines)"
                           Overwrite="true" />
-        <Exec Command="dotnet restore &quot;$(LocalAnalyzerInstallProjectPath)&quot; --packages &quot;$(NuGetGlobalPackagesFolder)&quot; --source &quot;$(PackageOutputPath)&quot; --force --no-cache" />
+        <Exec Command="dotnet restore &quot;$(LocalAnalyzerInstallProjectPath)&quot; --packages &quot;$(NuGetGlobalPackagesFolder)&quot; --source &quot;$(PackageOutputPath)&quot; --force --no-cache /p:RestoreIgnoreFailedSources=true" />
         <Error Condition="!Exists('$(LocalAnalyzerGlobalPackageCachePath)\$(AnalyzerPackageIdFolder).nuspec')"
                Text="Package was not installed to the NuGet global package cache: $(LocalAnalyzerGlobalPackageCachePath)" />
     </Target>

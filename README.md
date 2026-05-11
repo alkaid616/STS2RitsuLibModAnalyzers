@@ -118,18 +118,16 @@ Rider 可以加载 NuGet 包中的 Roslyn analyzer 和 code fix。启用 Roslyn 
 
 ## 本地开发
 
-测试本地构建包时，可以注册本地 NuGet 源：
+测试本地构建包时，`Pack` 会默认覆盖安装同版本包到本机 NuGet 全局包缓存。
 
-```powershell
-dotnet nuget add source C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\local-packages --name local-ritsulib-analyzers
-```
-
-构建并打包：
+构建、打包并覆盖安装：
 
 ```powershell
 dotnet test C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzers.sln --no-restore
-dotnet build C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\STS2RitsuLib.ModAnalyzers.csproj -c Release
+dotnet msbuild C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\STS2RitsuLib.ModAnalyzers.csproj /t:Pack /p:Configuration=Release
 ```
+
+默认安装路径为 `%USERPROFILE%\.nuget\packages`，也会尊重 `NUGET_PACKAGES` 环境变量。可以用 `/p:NuGetGlobalPackagesFolder=...` 覆盖目标目录；用 `/p:InstallAnalyzerOnPack=false` 只打包不安装。
 
 手动发布到 nuget.org：
 
