@@ -31,7 +31,7 @@ public sealed partial class RitsuLibModAnalyzer
             var typeName = type?.Name ?? creation switch
             {
                 ObjectCreationExpressionSyntax objectCreation => objectCreation.Type.ToString().Split('.').Last(),
-                _ => null,
+                _ => InferTypeNameFromContext(creation),
             };
             if (typeName == null)
                 return;
@@ -48,6 +48,24 @@ public sealed partial class RitsuLibModAnalyzer
                 MarkUsesRitsuLib();
                 AnalyzeRuntimeHotkeyOptionsCreation(creation, context);
             }
+
+            AnalyzeObjectCreationResourcePaths(creation, context);
+        }
+
+        private static string? InferTypeNameFromContext(BaseObjectCreationExpressionSyntax creation)
+        {
+            if (creation.Parent is EqualsValueClauseSyntax equalsValue &&
+                equalsValue.Parent is PropertyDeclarationSyntax property)
+                return property.Type.ToString().Split('.').Last();
+
+            if (creation.Parent is ArrowExpressionClauseSyntax arrow &&
+                arrow.Parent is PropertyDeclarationSyntax arrowProperty)
+                return arrowProperty.Type.ToString().Split('.').Last();
+
+            if (creation.Parent is AssignmentExpressionSyntax assignment)
+                return assignment.Left.ToString().Split('.').Last();
+
+            return null;
         }
 
         public void AnalyzeTypeDeclaration(SyntaxNodeAnalysisContext context)
@@ -110,6 +128,8 @@ public sealed partial class RitsuLibModAnalyzer
                         name);
                 }
             }
+
+            AnalyzeOverrideResourceProperty(property, context);
         }
 
         public void AnalyzeMethodDeclaration(SyntaxNodeAnalysisContext context)
@@ -293,11 +313,10 @@ public sealed partial class RitsuLibModAnalyzer
                 if (!IsResourceArgumentName(name) && !IsLikelyResourceMethod(methodName))
                     continue;
 
-                var value = GetConstantString(argument.Expression, context.SemanticModel, context.CancellationToken);
-                if (string.IsNullOrWhiteSpace(value))
+                if (!TryResolveStringExpression(argument.Expression, context.SemanticModel, context.CancellationToken, out var value))
                     continue;
 
-                AnalyzeResourceString(value!, argument.GetLocation(), context);
+                AnalyzeResourceString(value!, argument.GetLocation(), context, IsFixableResourcePathExpression(argument.Expression));
                 AnalyzeAudioString(value!, methodName, argument.GetLocation(), context);
             }
         }
@@ -1124,18 +1143,104 @@ public sealed partial class RitsuLibModAnalyzer
             AttributeSyntax attribute,
             SyntaxNodeAnalysisContext context)
         {
-            foreach (var name in new[] { "IconPath", "ScenePath", "TexturePath", "ResourcePath" })
+            if (attribute.ArgumentList == null)
+                return;
+
+            var constructor = context.SemanticModel.GetSymbolInfo(attribute, context.CancellationToken).Symbol as IMethodSymbol;
+            for (var i = 0; i < attribute.ArgumentList.Arguments.Count; i++)
             {
-                var value = GetAttributeNamedString(attribute, context.SemanticModel, name, context.CancellationToken);
-                if (string.IsNullOrWhiteSpace(value))
+                var argument = attribute.ArgumentList.Arguments[i];
+                var parameter = GetAttributeParameter(constructor, argument, i);
+                var name = argument.NameEquals?.Name.Identifier.ValueText ??
+                           argument.NameColon?.Name.Identifier.ValueText ??
+                           parameter?.Name;
+                if (!IsResourceArgumentName(name))
                     continue;
 
-                AnalyzeResourceString(value!, attribute.GetLocation(), context);
+                AnalyzeResourceExpression(argument.Expression, attribute.GetLocation(), context);
             }
         }
 
-        private void AnalyzeResourceString(string value, Location location, SyntaxNodeAnalysisContext context)
+        private void AnalyzeOverrideResourceProperty(
+            PropertyDeclarationSyntax property,
+            SyntaxNodeAnalysisContext context)
         {
+            if (!IsResourceArgumentName(property.Identifier.ValueText))
+                return;
+
+            var symbol = context.SemanticModel.GetDeclaredSymbol(property, context.CancellationToken);
+            if (symbol != null && !IsStringType(symbol.Type))
+                return;
+
+            var expression = property.ExpressionBody?.Expression ?? property.Initializer?.Value;
+            if (expression == null)
+                return;
+
+            AnalyzeResourceExpression(expression, expression.GetLocation(), context);
+        }
+
+        private void AnalyzeObjectCreationResourcePaths(
+            BaseObjectCreationExpressionSyntax creation,
+            SyntaxNodeAnalysisContext context)
+        {
+            var type = context.SemanticModel.GetTypeInfo(creation, context.CancellationToken).Type;
+            var isAssetProfile = IsAssetProfileType(type);
+            var constructor = context.SemanticModel.GetSymbolInfo(creation, context.CancellationToken).Symbol as IMethodSymbol;
+
+            if (creation.ArgumentList != null)
+            {
+                for (var i = 0; i < creation.ArgumentList.Arguments.Count; i++)
+                {
+                    var argument = creation.ArgumentList.Arguments[i];
+                    var parameter = GetConstructorParameter(constructor, argument, i);
+                    var name = argument.NameColon?.Name.Identifier.ValueText ?? parameter?.Name;
+                    var shouldAnalyze = isAssetProfile
+                        ? parameter == null || IsStringType(parameter.Type) || IsResourceArgumentName(name)
+                        : IsResourceArgumentName(name);
+
+                    if (!shouldAnalyze)
+                        continue;
+
+                    AnalyzeResourceExpression(argument.Expression, argument.GetLocation(), context);
+                }
+            }
+
+            if (isAssetProfile && creation.Initializer != null)
+                AnalyzeAssetProfileInitializerResourcePaths(creation.Initializer, context);
+        }
+
+        private void AnalyzeAssetProfileInitializerResourcePaths(
+            InitializerExpressionSyntax initializer,
+            SyntaxNodeAnalysisContext context)
+        {
+            foreach (var expression in initializer.Expressions)
+            {
+                if (expression is not AssignmentExpressionSyntax assignment)
+                    continue;
+
+                if (!ShouldAnalyzeAssetProfileInitializerAssignment(assignment, context.SemanticModel, context.CancellationToken))
+                    continue;
+
+                AnalyzeResourceExpression(assignment.Right, assignment.GetLocation(), context);
+            }
+        }
+
+        private void AnalyzeResourceExpression(
+            ExpressionSyntax expression,
+            Location location,
+            SyntaxNodeAnalysisContext context)
+        {
+            if (!TryResolveStringExpression(expression, context.SemanticModel, context.CancellationToken, out var value) ||
+                string.IsNullOrWhiteSpace(value))
+                return;
+
+            AnalyzeResourceString(value!, location, context, IsFixableResourcePathExpression(expression));
+        }
+
+        private void AnalyzeResourceString(string value, Location location, SyntaxNodeAnalysisContext context, bool fixable = true)
+        {
+            value = value.Trim();
+
             if (value.StartsWith("event:/", StringComparison.OrdinalIgnoreCase) ||
                 value.StartsWith("snapshot:/", StringComparison.OrdinalIgnoreCase) ||
                 value.StartsWith("bus:/", StringComparison.OrdinalIgnoreCase))
@@ -1147,9 +1252,11 @@ public sealed partial class RitsuLibModAnalyzer
                 {
                     ReportContract(context, RitsuLibDiagnostics.ResourcePathRule, location,
                         RitsuLibUiText.ResourcePathMissingPrefix(value),
-                        Properties(
-                            (RitsuLibDiagnosticProperties.StubKind, "ResourcePath"),
-                            (RitsuLibDiagnosticProperties.ResourcePath, value)));
+                        fixable
+                            ? Properties(
+                                (RitsuLibDiagnosticProperties.StubKind, "ResourcePath"),
+                                (RitsuLibDiagnosticProperties.ResourcePath, value))
+                            : EmptyProperties());
                 }
 
                 return;
@@ -1157,12 +1264,296 @@ public sealed partial class RitsuLibModAnalyzer
 
             if (_additionalFiles.HasAssetIndex && !_additionalFiles.ResourceExists(value))
             {
+                if (HasResourcePathNotFoundTodo(location, context, value))
+                    return;
+
+                var suggestedPath = _additionalFiles.TryFindExistingResourcePath(value);
                 ReportContract(context, RitsuLibDiagnostics.ResourcePathRule, location,
                     RitsuLibUiText.ResourcePathNotFound(value),
                     Properties(
-                        (RitsuLibDiagnosticProperties.StubKind, "ResourcePath"),
-                        (RitsuLibDiagnosticProperties.ResourcePath, value)));
+                        (RitsuLibDiagnosticProperties.StubKind, suggestedPath == null ? "ResourcePathNotFound" : "ResourcePath"),
+                        (RitsuLibDiagnosticProperties.ResourcePath, value),
+                        (RitsuLibDiagnosticProperties.SuggestedResourcePath, suggestedPath)));
             }
+        }
+
+        private static bool HasResourcePathNotFoundTodo(
+            Location location,
+            SyntaxNodeAnalysisContext context,
+            string resourcePath)
+        {
+            if (!location.IsInSource)
+                return false;
+
+            var root = context.Node.SyntaxTree.GetRoot(context.CancellationToken);
+            if (root.FullSpan.Length == 0)
+                return false;
+
+            var position = Math.Min(location.SourceSpan.Start, Math.Max(0, root.FullSpan.End - 1));
+            var token = root.FindToken(position);
+            if (ResourcePathNotFoundTodoTextMatches(token.LeadingTrivia, resourcePath) ||
+                ResourcePathNotFoundTodoTextMatches(token.TrailingTrivia, resourcePath))
+                return true;
+
+            var node = token.Parent;
+            if (node == null)
+                return false;
+
+            foreach (var ancestor in node.AncestorsAndSelf())
+            {
+                if (ResourcePathNotFoundTodoTextMatches(ancestor.GetLeadingTrivia(), resourcePath) ||
+                    ResourcePathNotFoundTodoTextMatches(ancestor.GetTrailingTrivia(), resourcePath))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool ResourcePathNotFoundTodoTextMatches(SyntaxTriviaList triviaList, string resourcePath)
+        {
+            foreach (var trivia in triviaList)
+            {
+                var text = trivia.ToFullString();
+                if (text.IndexOf("TODO RitsuLib analyzer", StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                if (text.IndexOf(resourcePath, StringComparison.Ordinal) < 0)
+                    continue;
+
+                if (text.IndexOf("项目资源索引中未找到", StringComparison.Ordinal) >= 0 ||
+                    text.IndexOf("project resource index", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool TryResolveStringExpression(
+            ExpressionSyntax expression,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken,
+            out string? result)
+        {
+            return RitsuLibResourcePathFacts.TryResolveStringExpression(expression, semanticModel, cancellationToken, out result);
+        }
+
+        private string? ResolveStringExpression(
+            ExpressionSyntax expression,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken,
+            bool allowNonStringConstant)
+        {
+            expression = Unwrap(expression);
+
+            var constant = semanticModel.GetConstantValue(expression, cancellationToken);
+            if (constant.HasValue)
+            {
+                if (constant.Value is string text)
+                    return text;
+
+                return allowNonStringConstant ? constant.Value?.ToString() : null;
+            }
+
+            if (expression is InterpolatedStringExpressionSyntax interpolated &&
+                TryResolveInterpolatedString(interpolated, semanticModel, cancellationToken, out var interpolatedValue))
+                return interpolatedValue;
+
+            if (expression is BinaryExpressionSyntax binary &&
+                binary.IsKind(SyntaxKind.AddExpression))
+            {
+                var left = ResolveStringExpression(binary.Left, semanticModel, cancellationToken, allowNonStringConstant: false);
+                var right = ResolveStringExpression(binary.Right, semanticModel, cancellationToken, allowNonStringConstant: false);
+                return left != null && right != null ? left + right : null;
+            }
+
+            if (expression is MemberAccessExpressionSyntax memberAccess)
+            {
+                if (IsCurrentInstanceGetTypeDotName(memberAccess))
+                    return GetEnclosingTypeName(memberAccess, semanticModel, cancellationToken);
+
+                if (memberAccess.Name.Identifier.ValueText == "Name" &&
+                    memberAccess.Expression is TypeOfExpressionSyntax typeOf)
+                {
+                    var type = semanticModel.GetTypeInfo(typeOf.Type, cancellationToken).Type;
+                    return type?.Name ?? typeOf.Type.ToString().Split('.').Last();
+                }
+            }
+
+            return ResolveSymbolBackedStringExpression(expression, semanticModel, cancellationToken);
+        }
+
+        private bool TryResolveInterpolatedString(
+            InterpolatedStringExpressionSyntax interpolated,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken,
+            out string? result)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var content in interpolated.Contents)
+            {
+                if (content is InterpolatedStringTextSyntax text)
+                {
+                    sb.Append(text.TextToken.ValueText);
+                    continue;
+                }
+
+                if (content is InterpolationSyntax interpolation)
+                {
+                    var part = ResolveStringExpression(interpolation.Expression, semanticModel, cancellationToken, allowNonStringConstant: true);
+                    if (part == null)
+                    {
+                        result = null;
+                        return false;
+                    }
+
+                    sb.Append(part);
+                    continue;
+                }
+
+                result = null;
+                return false;
+            }
+
+            result = sb.ToString();
+            return true;
+        }
+
+        private string? ResolveSymbolBackedStringExpression(
+            ExpressionSyntax expression,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var symbol = semanticModel.GetSymbolInfo(expression, cancellationToken).Symbol;
+            if (symbol == null)
+                return null;
+
+            if (symbol is not IPropertySymbol and not IFieldSymbol and not ILocalSymbol)
+                return null;
+
+            foreach (var syntaxRef in symbol.DeclaringSyntaxReferences)
+            {
+                var syntax = syntaxRef.GetSyntax(cancellationToken);
+                ExpressionSyntax? initializer = syntax switch
+                {
+                    PropertyDeclarationSyntax prop => prop.Initializer?.Value ?? prop.ExpressionBody?.Expression,
+                    VariableDeclaratorSyntax var => var.Initializer?.Value,
+                    _ => null,
+                };
+
+                if (initializer == null)
+                    continue;
+
+                var initializerModel = GetSemanticModelForSyntax(semanticModel, initializer);
+                var value = ResolveStringExpression(initializer, initializerModel, cancellationToken, allowNonStringConstant: false);
+                if (value != null)
+                    return value;
+            }
+
+            return null;
+        }
+
+        private static IParameterSymbol? GetConstructorParameter(IMethodSymbol? constructor, ArgumentSyntax argument, int position)
+        {
+            if (constructor == null)
+                return null;
+
+            var name = argument.NameColon?.Name.Identifier.ValueText;
+            if (!string.IsNullOrWhiteSpace(name))
+                return constructor.Parameters.FirstOrDefault(parameter => string.Equals(parameter.Name, name, StringComparison.Ordinal));
+
+            return position < constructor.Parameters.Length ? constructor.Parameters[position] : null;
+        }
+
+        private static IParameterSymbol? GetAttributeParameter(IMethodSymbol? constructor, AttributeArgumentSyntax argument, int position)
+        {
+            if (constructor == null)
+                return null;
+
+            var name = argument.NameColon?.Name.Identifier.ValueText;
+            if (!string.IsNullOrWhiteSpace(name))
+                return constructor.Parameters.FirstOrDefault(parameter => string.Equals(parameter.Name, name, StringComparison.Ordinal));
+
+            return position < constructor.Parameters.Length ? constructor.Parameters[position] : null;
+        }
+
+        private static bool ShouldAnalyzeAssetProfileInitializerAssignment(
+            AssignmentExpressionSyntax assignment,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var symbol = semanticModel.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
+            return symbol switch
+            {
+                IPropertySymbol property => IsStringType(property.Type) || IsResourceArgumentName(property.Name),
+                IFieldSymbol field => IsStringType(field.Type) || IsResourceArgumentName(field.Name),
+                _ => true,
+            };
+        }
+
+        private static bool IsAssetProfileType(ITypeSymbol? type)
+        {
+            var current = type as INamedTypeSymbol;
+            while (current != null)
+            {
+                if (current.Name.EndsWith("AssetProfile", StringComparison.Ordinal))
+                    return true;
+
+                current = current.BaseType;
+            }
+
+            return false;
+        }
+
+        private static bool IsStringType(ITypeSymbol? type)
+        {
+            return type?.SpecialType == SpecialType.System_String;
+        }
+
+        private static bool IsFixableResourcePathExpression(ExpressionSyntax expression)
+        {
+            var unwrapped = Unwrap(expression);
+            return unwrapped.IsKind(SyntaxKind.StringLiteralExpression) ||
+                   unwrapped is InterpolatedStringExpressionSyntax;
+        }
+
+        private static bool IsCurrentInstanceGetTypeDotName(MemberAccessExpressionSyntax memberAccess)
+        {
+            return memberAccess.Name.Identifier.ValueText == "Name" &&
+                   memberAccess.Expression is InvocationExpressionSyntax invocation &&
+                   IsCurrentInstanceGetTypeInvocation(invocation);
+        }
+
+        private static bool IsCurrentInstanceGetTypeInvocation(InvocationExpressionSyntax invocation)
+        {
+            if (invocation.ArgumentList.Arguments.Count != 0)
+                return false;
+
+            return invocation.Expression switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText == "GetType",
+                MemberAccessExpressionSyntax memberAccess when memberAccess.Name.Identifier.ValueText == "GetType" =>
+                    Unwrap(memberAccess.Expression) is ThisExpressionSyntax or BaseExpressionSyntax,
+                _ => false,
+            };
+        }
+
+        private static string? GetEnclosingTypeName(
+            SyntaxNode node,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var symbol = semanticModel.GetEnclosingSymbol(node.SpanStart, cancellationToken)?.ContainingType;
+            if (symbol != null)
+                return symbol.Name;
+
+            return node.FirstAncestorOrSelf<TypeDeclarationSyntax>()?.Identifier.ValueText;
+        }
+
+        private static SemanticModel GetSemanticModelForSyntax(SemanticModel semanticModel, SyntaxNode node)
+        {
+            return node.SyntaxTree == semanticModel.SyntaxTree
+                ? semanticModel
+                : semanticModel.Compilation.GetSemanticModel(node.SyntaxTree);
         }
 
         private void AnalyzeAudioString(

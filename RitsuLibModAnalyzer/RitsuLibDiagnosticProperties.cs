@@ -21,6 +21,7 @@ internal static class RitsuLibDiagnosticProperties
     public const string TargetSection = "TargetSection";
     public const string TargetFile = "TargetFile";
     public const string ResourcePath = "ResourcePath";
+    public const string SuggestedResourcePath = "SuggestedResourcePath";
     public const string DisposableMethod = "DisposableMethod";
     public const string ReturnTypeName = "ReturnTypeName";
     public const string SourceMethod = "SourceMethod";

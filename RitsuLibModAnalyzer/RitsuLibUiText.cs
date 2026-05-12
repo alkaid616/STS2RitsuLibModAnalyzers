@@ -487,8 +487,8 @@ internal static class RitsuLibUiText
 
     public static string ResourcePathNotFound(string value) =>
         IsChinese
-            ? $"资源路径 '{value}' 在 analyzer AdditionalFiles 中未找到。"
-            : $"Resource path '{value}' was not found in analyzer AdditionalFiles.";
+            ? $"资源路径 '{value}' 在项目资源索引中未找到。"
+            : $"'{value}' was not found in the project resource index.";
 
     // RITSU014: Audio string messages
     public static string FmodBusPathPrefix(string value) =>

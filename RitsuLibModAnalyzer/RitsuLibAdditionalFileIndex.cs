@@ -13,18 +13,13 @@ internal sealed class RitsuLibAdditionalFileIndex
 {
     private const string I18NTable = "__ritsulib_i18n__";
 
-    private static readonly string[] AssetExtensions =
-    {
-        ".png", ".jpg", ".jpeg", ".webp", ".svg", ".ogg", ".wav", ".mp3", ".bank", ".tscn", ".tres", ".res",
-        ".theme", ".json", ".txt", ".gdshader", ".material",
-    };
-
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _tableKeysByLanguage;
     private readonly Dictionary<string, HashSet<string>> _i18NKeysByLanguage;
     private readonly Dictionary<string, Dictionary<string, string>> _tablePathsByLanguage;
     private readonly Dictionary<string, string> _i18NPathsByLanguage;
     private readonly HashSet<string> _assetRelativePaths;
     private readonly string[] _roots;
+    private readonly string? _projectDirectory;
 
     private RitsuLibAdditionalFileIndex(
         ModManifestInfo manifest,
@@ -34,6 +29,7 @@ internal sealed class RitsuLibAdditionalFileIndex
         Dictionary<string, string> i18NPathsByLanguage,
         HashSet<string> assetRelativePaths,
         List<string> roots,
+        string? projectDirectory,
         bool hasGodotTextResources)
     {
         Manifest = manifest;
@@ -43,8 +39,9 @@ internal sealed class RitsuLibAdditionalFileIndex
         _i18NPathsByLanguage = i18NPathsByLanguage;
         _assetRelativePaths = assetRelativePaths;
         _roots = roots.OrderBy(root => root, StringComparer.OrdinalIgnoreCase).ToArray();
+        _projectDirectory = NormalizeProjectDirectory(projectDirectory);
         HasGodotTextResources = hasGodotTextResources;
-        HasAssetIndex = assetRelativePaths.Count > 0;
+        HasAssetIndex = assetRelativePaths.Count > 0 || _projectDirectory != null;
         Languages = tableKeysByLanguage.Keys
             .Concat(i18NKeysByLanguage.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -68,6 +65,8 @@ internal sealed class RitsuLibAdditionalFileIndex
         ModManifestInfo manifest = ModManifestInfo.None;
         var hasGodotTextResources = false;
         var projectDirectory = GetBuildProperty(context.Options, "MSBuildProjectDirectory");
+
+        AddProjectDirectoryAssets(projectDirectory, assetRelativePaths);
 
         foreach (var file in context.Options.AdditionalFiles)
         {
@@ -153,6 +152,7 @@ internal sealed class RitsuLibAdditionalFileIndex
             i18NPathsByLanguage,
             assetRelativePaths,
             roots,
+            projectDirectory,
             hasGodotTextResources);
     }
 
@@ -190,20 +190,58 @@ internal sealed class RitsuLibAdditionalFileIndex
         if (string.IsNullOrWhiteSpace(resourcePath))
             return false;
 
-        var relative = NormalizeResourcePath(resourcePath);
+        var relative = RitsuLibResourcePathFacts.NormalizeResourcePath(resourcePath);
         if (string.IsNullOrWhiteSpace(relative))
             return false;
 
         if (_assetRelativePaths.Contains(relative))
             return true;
 
+        if (_projectDirectory != null)
+        {
+            try
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(_projectDirectory, relative.Replace('/', Path.DirectorySeparatorChar)));
+                var rootWithSeparator = _projectDirectory.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) ||
+                                        _projectDirectory.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                    ? _projectDirectory
+                    : _projectDirectory + Path.DirectorySeparatorChar;
+
+                if (fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase) &&
+                    File.Exists(fullPath))
+                    return true;
+            }
+            catch
+            {
+                // Ignore malformed resource paths and fall back to the indexed assets.
+            }
+        }
+
         return false;
+    }
+
+    public string? TryFindExistingResourcePath(string resourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(resourcePath))
+            return null;
+
+        var relative = RitsuLibResourcePathFacts.NormalizeResourcePath(resourcePath);
+        if (string.IsNullOrWhiteSpace(relative))
+            return null;
+
+        if (_assetRelativePaths.Contains(relative))
+            return "res://" + relative;
+
+        var matches = _assetRelativePaths
+            .Where(path => path.EndsWith("/" + relative, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        return matches.Length == 1 ? "res://" + matches[0] : null;
     }
 
     public static bool IsResourcePath(string value)
     {
-        return value.StartsWith("res://", StringComparison.OrdinalIgnoreCase) ||
-               value.StartsWith("user://", StringComparison.OrdinalIgnoreCase);
+        return RitsuLibResourcePathFacts.IsResourcePath(value);
     }
 
     public static string NormalizeLanguageCode(string? language)
@@ -272,36 +310,58 @@ internal sealed class RitsuLibAdditionalFileIndex
 
     private static bool IsIgnoredPath(string path)
     {
-        var normalized = path.Replace('\\', '/');
-        return normalized.IndexOf("/bin/", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               normalized.IndexOf("/obj/", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               normalized.IndexOf("/.git/", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               normalized.IndexOf("/.godot/", StringComparison.OrdinalIgnoreCase) >= 0;
+        return RitsuLibResourcePathFacts.IsIgnoredPath(path);
+    }
+
+    private static void AddProjectDirectoryAssets(string? projectDirectory, HashSet<string> assetRelativePaths)
+    {
+        if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
+            return;
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(projectDirectory, "*", SearchOption.AllDirectories))
+            {
+                if (IsIgnoredPath(file))
+                    continue;
+
+                if (!RitsuLibResourcePathFacts.IsAssetPath(file))
+                    continue;
+
+                if (RitsuLibResourcePathFacts.TryGetProjectRelativePath(file, projectDirectory, out var relativePath))
+                    assetRelativePaths.Add(relativePath);
+            }
+        }
+        catch
+        {
+            // Silently ignore enumeration errors (permission issues, etc.)
+        }
     }
 
     private static void AddAssetPath(string path, string? projectDirectory, HashSet<string> relativePaths)
     {
-        var extension = Path.GetExtension(path);
-        if (!AssetExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase) &&
-            !path.EndsWith(".guids.txt", StringComparison.OrdinalIgnoreCase) &&
-            !path.EndsWith(".theme.json", StringComparison.OrdinalIgnoreCase))
+        if (!RitsuLibResourcePathFacts.IsAssetPath(path))
             return;
 
-        if (!TryGetProjectRelativePath(path, projectDirectory, out var relativePath))
+        if (!RitsuLibResourcePathFacts.TryGetProjectRelativePath(path, projectDirectory, out var relativePath))
             return;
 
         relativePaths.Add(relativePath);
     }
 
-    private static string NormalizeResourcePath(string resourcePath)
+    private static string? NormalizeProjectDirectory(string? projectDirectory)
     {
-        var text = resourcePath.Trim().Replace('\\', '/');
-        if (text.StartsWith("res://", StringComparison.OrdinalIgnoreCase))
-            text = text.Substring("res://".Length);
-        else if (text.StartsWith("user://", StringComparison.OrdinalIgnoreCase))
-            text = text.Substring("user://".Length);
+        if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
+            return null;
 
-        return text.TrimStart('/');
+        try
+        {
+            return Path.GetFullPath(projectDirectory!);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string? GetBuildProperty(AnalyzerOptions options, string name)
@@ -310,26 +370,6 @@ internal sealed class RitsuLibAdditionalFileIndex
                !string.IsNullOrWhiteSpace(value)
             ? value
             : null;
-    }
-
-    private static bool TryGetProjectRelativePath(string path, string? projectDirectory, out string relativePath)
-    {
-        relativePath = string.Empty;
-        if (string.IsNullOrWhiteSpace(projectDirectory))
-            return false;
-
-        var root = Path.GetFullPath(projectDirectory!);
-        var fullPath = Path.GetFullPath(path);
-        var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) ||
-                                root.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-            ? root
-            : root + Path.DirectorySeparatorChar;
-
-        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        relativePath = fullPath.Substring(rootWithSeparator.Length).Replace('\\', '/');
-        return !string.IsNullOrWhiteSpace(relativePath) && !relativePath.StartsWith("../", StringComparison.Ordinal);
     }
 
     private static string CombinePath(params string[] parts)
