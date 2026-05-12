@@ -11,10 +11,11 @@ if "%NUGET_API_KEY%"=="PUT_YOUR_NUGET_API_KEY_HERE" (
 set "CONFIGURATION=Release"
 set "NUGET_SOURCE=https://api.nuget.org/v3/index.json"
 
-set "PROJECT_FILE=%~dp0RitsuLibModAnalyzer\STS2RitsuLib.ModAnalyzers.csproj"
+set "ANALYZER_PROJECT=%~dp0RitsuLibModAnalyzer\STS2RitsuLib.ModAnalyzers.csproj"
+set "TEST_PROJECT=%~dp0RitsuLibModAnalyzer.Tests\RitsuLibModAnalyzer.Tests.csproj"
 
-if not exist "%PROJECT_FILE%" (
-  echo Project file not found: "%PROJECT_FILE%"
+if not exist "%ANALYZER_PROJECT%" (
+  echo Analyzer project not found: "%ANALYZER_PROJECT%"
   exit /b 1
 )
 
@@ -28,23 +29,14 @@ pushd "%~dp0" >nul
 echo.
 echo ============================================================
 echo Publishing RitsuLib ModAnalyzers NuGet package
-echo Project: "%PROJECT_FILE%"
+echo Project: "%ANALYZER_PROJECT%"
 echo Configuration: %CONFIGURATION%
 echo Source: %NUGET_SOURCE%
 echo ============================================================
 echo.
 
-echo [1/3] Building...
-dotnet build "%PROJECT_FILE%" -c %CONFIGURATION%
-if errorlevel 1 (
-  echo Build failed.
-  popd >nul
-  exit /b 1
-)
-
-echo.
-echo [2/3] Running tests...
-dotnet test RitsuLibModAnalyzer.Tests\RitsuLibModAnalyzer.Tests.csproj --no-build -c %CONFIGURATION%
+echo [1/2] Running tests in %CONFIGURATION%...
+dotnet test "%TEST_PROJECT%" -c %CONFIGURATION%
 if errorlevel 1 (
   echo Tests failed.
   popd >nul
@@ -52,15 +44,12 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/3] Pushing to NuGet...
-for %%f in ("%~dp0RitsuLibModAnalyzer\bin\%CONFIGURATION%\*.nupkg") do (
-  echo   Pushing: %%~nxf
-  dotnet nuget push "%%f" --api-key "%NUGET_API_KEY%" --source "%NUGET_SOURCE%" --skip-duplicate --no-symbols
-  if errorlevel 1 (
-    echo NuGet push failed for %%~nxf.
-    popd >nul
-    exit /b 1
-  )
+echo [2/2] Packing and publishing to NuGet...
+dotnet msbuild "%ANALYZER_PROJECT%" /t:PublishAnalyzerToNuGet /p:Configuration=%CONFIGURATION% /p:NuGetApiKey="%NUGET_API_KEY%" /p:NuGetPushSource="%NUGET_SOURCE%"
+if errorlevel 1 (
+  echo NuGet publish failed.
+  popd >nul
+  exit /b 1
 )
 
 popd >nul
