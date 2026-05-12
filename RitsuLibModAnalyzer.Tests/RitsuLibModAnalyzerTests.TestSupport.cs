@@ -519,7 +519,7 @@ public sealed partial class RitsuLibModAnalyzerTests
 
     private static async Task<List<CodeAction>> GetCodeActionsAsync(Project project, Diagnostic diagnostic)
     {
-        var document = Assert.Single(project.Documents);
+        var document = GetDocumentForDiagnostic(project, diagnostic);
         List<CodeAction> actions = new();
         var provider = new RitsuLibLocalizationCodeFixProvider();
         var context = new CodeFixContext(
@@ -530,6 +530,20 @@ public sealed partial class RitsuLibModAnalyzerTests
 
         await provider.RegisterCodeFixesAsync(context);
         return actions;
+    }
+
+    private static Document GetDocumentForDiagnostic(Project project, Diagnostic diagnostic)
+    {
+        if (diagnostic.Location.IsInSource &&
+            !string.IsNullOrWhiteSpace(diagnostic.Location.SourceTree?.FilePath))
+        {
+            var document = project.Documents.SingleOrDefault(candidate =>
+                string.Equals(candidate.FilePath, diagnostic.Location.SourceTree!.FilePath, StringComparison.OrdinalIgnoreCase));
+            if (document != null)
+                return document;
+        }
+
+        return Assert.Single(project.Documents);
     }
 
     private static int ExtractCaret(ref string source)
@@ -560,6 +574,14 @@ public sealed partial class RitsuLibModAnalyzerTests
     private static async Task<string> GetDocumentTextAsync(Solution solution)
     {
         var document = solution.Projects.SelectMany(project => project.Documents).Single();
+        return (await document.GetTextAsync()).ToString();
+    }
+
+    private static async Task<string> GetDocumentTextAsync(Solution solution, string fileName)
+    {
+        var document = solution.Projects
+            .SelectMany(project => project.Documents)
+            .Single(candidate => string.Equals(candidate.Name, fileName, StringComparison.OrdinalIgnoreCase));
         return (await document.GetTextAsync()).ToString();
     }
 

@@ -243,6 +243,9 @@ internal static class RitsuLibUiText
     public static string InsertTodoFixTitle =>
         IsChinese ? "插入 RitsuLib TODO 修复片段" : "Insert RitsuLib TODO fix snippet";
 
+    public static string InsertCurrentFileResourcePathTodosTitle =>
+        IsChinese ? "为当前文件所有缺失资源路径插入 RitsuLib TODO" : "Insert RitsuLib TODOs for all missing resource paths in current file";
+
     // RITSU017: Disposable handle not disposed
     public static string DisposableNotDisposedTitle =>
         IsChinese ? "RitsuLib 可释放句柄未释放" : "RitsuLib disposable handle not disposed";

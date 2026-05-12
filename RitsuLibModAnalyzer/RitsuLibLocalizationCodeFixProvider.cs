@@ -130,6 +130,21 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                             "AddRitsuLibResourcePathResPrefix"),
                         diagnostic);
                 }
+                else if (IsResourcePathNotFoundDiagnostic(diagnostic))
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertTodoFixTitle,
+                            cancellationToken => InsertResourcePathNotFoundTodoCommentAsync(context.Document, diagnostic, cancellationToken),
+                            "InsertRitsuLibResourcePathNotFoundTodoSnippet"),
+                        diagnostic);
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertCurrentFileResourcePathTodosTitle,
+                            cancellationToken => InsertCurrentDocumentResourcePathTodosAsync(context.Document, diagnostic, cancellationToken),
+                            "InsertRitsuLibResourcePathNotFoundTodosInCurrentFile"),
+                        diagnostic);
+                }
                 else
                 {
                     context.RegisterCodeFix(
@@ -685,6 +700,145 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return document.WithSyntaxRoot(root.ReplaceNode(node, newNode));
     }
 
+    private static async Task<Document> InsertResourcePathNotFoundTodoCommentAsync(
+        Document document,
+        Diagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null || semanticModel == null)
+            return document;
+
+        if (!TryFindResourcePathTodoTarget(root, diagnostic, semanticModel, cancellationToken, out var target))
+            return await InsertTodoCommentAsync(document, diagnostic, null, cancellationToken).ConfigureAwait(false);
+
+        return document.WithSyntaxRoot(root.ReplaceNode(target, AddTodoComment(target, diagnostic, null)));
+    }
+
+    private static async Task<Document> InsertCurrentDocumentResourcePathTodosAsync(
+        Document document,
+        Diagnostic triggerDiagnostic,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null || semanticModel == null)
+            return document;
+
+        var diagnostics = await CollectProjectDiagnosticsAsync(document.Project, cancellationToken).ConfigureAwait(false);
+        var insertions = diagnostics
+            .Where(IsResourcePathNotFoundDiagnostic)
+            .Where(diagnostic => IsDiagnosticInDocument(diagnostic, document))
+            .Concat(IsResourcePathNotFoundDiagnostic(triggerDiagnostic) && IsDiagnosticInDocument(triggerDiagnostic, document)
+                ? new[] { triggerDiagnostic }
+                : Array.Empty<Diagnostic>())
+            .Distinct(ResourcePathTodoDiagnosticComparer.Instance)
+            .Select(diagnostic => TryCreateResourcePathTodoInsertion(root, semanticModel, diagnostic, cancellationToken, out var insertion)
+                ? insertion
+                : null)
+            .Where(insertion => insertion != null)
+            .Cast<ResourcePathTodoInsertion>()
+            .Where(insertion => !ResourcePathNotFoundTodoTextMatches(insertion.Target.GetLeadingTrivia(), insertion.ResourcePath) &&
+                                !ResourcePathNotFoundTodoTextMatches(insertion.Target.GetTrailingTrivia(), insertion.ResourcePath))
+            .ToArray();
+
+        if (insertions.Length == 0)
+            return document;
+
+        var insertionsByTarget = insertions
+            .GroupBy(insertion => insertion.Target.Span)
+            .ToDictionary(group => group.Key, group => group.OrderBy(insertion => insertion.Diagnostic.Location.SourceSpan.Start).ToArray());
+
+        var newRoot = root.ReplaceNodes(
+            insertionsByTarget.Values.Select(group => group[0].Target),
+            (original, _) => AddTodoComments(original, insertionsByTarget[original.Span].Select(insertion => insertion.Diagnostic)));
+        return document.WithSyntaxRoot(newRoot);
+    }
+
+    private static bool TryCreateResourcePathTodoInsertion(
+        SyntaxNode root,
+        SemanticModel semanticModel,
+        Diagnostic diagnostic,
+        CancellationToken cancellationToken,
+        out ResourcePathTodoInsertion? insertion)
+    {
+        insertion = null;
+        if (!TryGetResourcePathNotFoundDiagnosticPath(diagnostic, out var resourcePath) ||
+            !TryFindResourcePathTodoTarget(root, diagnostic, semanticModel, cancellationToken, out var target))
+            return false;
+
+        insertion = new ResourcePathTodoInsertion(diagnostic, target, resourcePath);
+        return true;
+    }
+
+    private static bool TryFindResourcePathTodoTarget(
+        SyntaxNode root,
+        Diagnostic diagnostic,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken,
+        out SyntaxNode target)
+    {
+        target = root;
+        if (!TryGetResourcePathNotFoundDiagnosticPath(diagnostic, out var resourcePath) ||
+            !diagnostic.Location.IsInSource)
+            return false;
+
+        var node = FindNodeForDiagnostic(root, diagnostic);
+        var expression = node.DescendantNodesAndSelf()
+            .OfType<ExpressionSyntax>()
+            .Where(expression => RitsuLibResourcePathFacts.TryResolveStringExpression(
+                expression,
+                semanticModel,
+                cancellationToken,
+                out var value) &&
+                string.Equals(value?.Trim(), resourcePath, StringComparison.Ordinal))
+            .OrderBy(expression => expression.Span.Length)
+            .FirstOrDefault();
+        if (expression == null)
+            return false;
+
+        target = GetResourcePathTodoTarget(expression);
+        return true;
+    }
+
+    private static SyntaxNode GetResourcePathTodoTarget(ExpressionSyntax expression)
+    {
+        if (expression.Parent is ArgumentSyntax argument)
+        {
+            var invocation = argument.FirstAncestorOrSelf<InvocationExpressionSyntax>();
+            return invocation != null ? invocation : argument;
+        }
+
+        if (expression.Parent is AttributeArgumentSyntax attributeArgument)
+            return attributeArgument;
+
+        if (expression.Parent is AssignmentExpressionSyntax assignment &&
+            assignment.Right == expression)
+            return assignment;
+
+        return expression;
+    }
+
+    private static SyntaxNode AddTodoComment(SyntaxNode node, Diagnostic diagnostic, string? detail)
+    {
+        var comment = SyntaxFactory.Comment(BuildTodoComment(diagnostic, detail));
+        return node.WithLeadingTrivia(node.GetLeadingTrivia().Add(comment).Add(SyntaxFactory.ElasticCarriageReturnLineFeed));
+    }
+
+    private static SyntaxNode AddTodoComments(SyntaxNode node, IEnumerable<Diagnostic> diagnostics)
+    {
+        var trivia = node.GetLeadingTrivia();
+        foreach (var diagnostic in diagnostics)
+        {
+            trivia = trivia
+                .Add(SyntaxFactory.Comment(BuildTodoComment(diagnostic, null)))
+                .Add(SyntaxFactory.ElasticCarriageReturnLineFeed);
+        }
+
+        return node.WithLeadingTrivia(trivia);
+    }
+
     private static string BuildTodoComment(Diagnostic diagnostic, string? detail)
     {
         var message = SanitizeCommentText(diagnostic.GetMessage());
@@ -810,6 +964,54 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         }
 
         value = string.Empty;
+        return false;
+    }
+
+    private static bool IsResourcePathNotFoundDiagnostic(Diagnostic diagnostic)
+    {
+        return TryGetResourcePathNotFoundDiagnosticPath(diagnostic, out _);
+    }
+
+    private static bool TryGetResourcePathNotFoundDiagnosticPath(Diagnostic diagnostic, out string resourcePath)
+    {
+        if (diagnostic.Id == RitsuLibDiagnostics.ResourcePathId &&
+            IsStubKind(diagnostic, "ResourcePathNotFound") &&
+            TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.ResourcePath, out resourcePath))
+        {
+            return true;
+        }
+
+        resourcePath = string.Empty;
+        return false;
+    }
+
+    private static bool IsDiagnosticInDocument(Diagnostic diagnostic, Document document)
+    {
+        if (!diagnostic.Location.IsInSource)
+            return false;
+
+        var diagnosticPath = diagnostic.Location.SourceTree?.FilePath;
+        return !string.IsNullOrWhiteSpace(diagnosticPath) &&
+               !string.IsNullOrWhiteSpace(document.FilePath) &&
+               string.Equals(diagnosticPath, document.FilePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ResourcePathNotFoundTodoTextMatches(SyntaxTriviaList triviaList, string resourcePath)
+    {
+        foreach (var trivia in triviaList)
+        {
+            var text = trivia.ToFullString();
+            if (text.IndexOf("TODO RitsuLib analyzer", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            if (text.IndexOf(resourcePath, StringComparison.Ordinal) < 0)
+                continue;
+
+            if (text.IndexOf("项目资源索引中未找到", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("project resource index", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+        }
+
         return false;
     }
 
@@ -946,9 +1148,23 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         Project project,
         CancellationToken cancellationToken)
     {
+        var diagnostics = await CollectProjectDiagnosticsAsync(project, cancellationToken).ConfigureAwait(false);
+        return diagnostics
+            .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
+            .Select(ReadRequest)
+            .Where(request => request != null)
+            .Cast<LocalizationFixRequest>()
+            .Distinct()
+            .ToImmutableArray();
+    }
+
+    private static async Task<ImmutableArray<Diagnostic>> CollectProjectDiagnosticsAsync(
+        Project project,
+        CancellationToken cancellationToken)
+    {
         var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
         if (compilation == null)
-            return ImmutableArray<LocalizationFixRequest>.Empty;
+            return ImmutableArray<Diagnostic>.Empty;
 
         var additionalTexts = project.AdditionalDocuments
             .Select(document => new AdditionalDocumentText(document))
@@ -968,14 +1184,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 logAnalyzerExecutionTime: false,
                 reportSuppressedDiagnostics: false));
 
-        var diagnostics = await compilationWithAnalyzers.GetAnalyzerDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
-        return diagnostics
-            .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
-            .Select(ReadRequest)
-            .Where(request => request != null)
-            .Cast<LocalizationFixRequest>()
-            .Distinct()
-            .ToImmutableArray();
+        return await compilationWithAnalyzers.GetAnalyzerDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static AnalyzerConfigOptionsProvider CreateAnalyzerConfigOptionsProvider(Project project)
@@ -1377,6 +1586,59 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         public LocalizationFixRequest WithEntries(ImmutableArray<KeyValuePair<string, string>> entries)
         {
             return new LocalizationFixRequest(TargetPath, Language, Table, IsI18N, entries);
+        }
+    }
+
+    private sealed class ResourcePathTodoInsertion
+    {
+        public ResourcePathTodoInsertion(Diagnostic diagnostic, SyntaxNode target, string resourcePath)
+        {
+            Diagnostic = diagnostic;
+            Target = target;
+            ResourcePath = resourcePath;
+        }
+
+        public Diagnostic Diagnostic { get; }
+        public SyntaxNode Target { get; }
+        public string ResourcePath { get; }
+    }
+
+    private sealed class ResourcePathTodoDiagnosticComparer : IEqualityComparer<Diagnostic>
+    {
+        public static ResourcePathTodoDiagnosticComparer Instance { get; } = new();
+
+        public bool Equals(Diagnostic? x, Diagnostic? y)
+        {
+            if (ReferenceEquals(x, y))
+                return true;
+
+            if (x == null || y == null)
+                return false;
+
+            return string.Equals(x.Id, y.Id, StringComparison.Ordinal) &&
+                   x.Location.SourceSpan.Equals(y.Location.SourceSpan) &&
+                   string.Equals(x.Location.SourceTree?.FilePath, y.Location.SourceTree?.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(GetResourcePath(x), GetResourcePath(y), StringComparison.Ordinal);
+        }
+
+        public int GetHashCode(Diagnostic obj)
+        {
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + StringComparer.Ordinal.GetHashCode(obj.Id);
+                hash = hash * 31 + obj.Location.SourceSpan.GetHashCode();
+                hash = hash * 31 + StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Location.SourceTree?.FilePath ?? string.Empty);
+                hash = hash * 31 + StringComparer.Ordinal.GetHashCode(GetResourcePath(obj));
+                return hash;
+            }
+        }
+
+        private static string GetResourcePath(Diagnostic diagnostic)
+        {
+            return diagnostic.Properties.TryGetValue(RitsuLibDiagnosticProperties.ResourcePath, out var resourcePath)
+                ? resourcePath ?? string.Empty
+                : string.Empty;
         }
     }
 

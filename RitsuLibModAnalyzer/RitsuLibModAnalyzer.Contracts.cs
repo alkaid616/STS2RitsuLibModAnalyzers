@@ -1157,7 +1157,7 @@ public sealed partial class RitsuLibModAnalyzer
                 if (!IsResourceArgumentName(name))
                     continue;
 
-                AnalyzeResourceExpression(argument.Expression, attribute.GetLocation(), context);
+                AnalyzeResourceExpression(argument.Expression, argument.GetLocation(), context);
             }
         }
 
@@ -1289,24 +1289,71 @@ public sealed partial class RitsuLibModAnalyzer
             if (root.FullSpan.Length == 0)
                 return false;
 
-            var position = Math.Min(location.SourceSpan.Start, Math.Max(0, root.FullSpan.End - 1));
-            var token = root.FindToken(position);
-            if (ResourcePathNotFoundTodoTextMatches(token.LeadingTrivia, resourcePath) ||
-                ResourcePathNotFoundTodoTextMatches(token.TrailingTrivia, resourcePath))
-                return true;
+            if (!TryFindResourcePathTodoTarget(
+                    root,
+                    location,
+                    context.SemanticModel,
+                    resourcePath,
+                    context.CancellationToken,
+                    out var target))
+                return false;
 
-            var node = token.Parent;
+            return ResourcePathNotFoundTodoTextMatches(target.GetLeadingTrivia(), resourcePath) ||
+                   ResourcePathNotFoundTodoTextMatches(target.GetTrailingTrivia(), resourcePath);
+        }
+
+        private static bool TryFindResourcePathTodoTarget(
+            SyntaxNode root,
+            Location location,
+            SemanticModel semanticModel,
+            string resourcePath,
+            System.Threading.CancellationToken cancellationToken,
+            out SyntaxNode target)
+        {
+            target = root;
+            if (!location.IsInSource)
+                return false;
+
+            var span = location.SourceSpan;
+            var node = span.Length == 0 && span.Start < root.FullSpan.End
+                ? root.FindToken(span.Start).Parent
+                : root.FindNode(span, getInnermostNodeForTie: true);
             if (node == null)
                 return false;
 
-            foreach (var ancestor in node.AncestorsAndSelf())
+            var expression = node.DescendantNodesAndSelf()
+                .OfType<ExpressionSyntax>()
+                .Where(expression => RitsuLibResourcePathFacts.TryResolveStringExpression(
+                    expression,
+                    semanticModel,
+                    cancellationToken,
+                    out var value) &&
+                    string.Equals(value?.Trim(), resourcePath, StringComparison.Ordinal))
+                .OrderBy(expression => expression.Span.Length)
+                .FirstOrDefault();
+            if (expression == null)
+                return false;
+
+            target = GetResourcePathTodoTarget(expression);
+            return true;
+        }
+
+        private static SyntaxNode GetResourcePathTodoTarget(ExpressionSyntax expression)
+        {
+            if (expression.Parent is ArgumentSyntax argument)
             {
-                if (ResourcePathNotFoundTodoTextMatches(ancestor.GetLeadingTrivia(), resourcePath) ||
-                    ResourcePathNotFoundTodoTextMatches(ancestor.GetTrailingTrivia(), resourcePath))
-                    return true;
+                var invocation = argument.FirstAncestorOrSelf<InvocationExpressionSyntax>();
+                return invocation != null ? invocation : argument;
             }
 
-            return false;
+            if (expression.Parent is AttributeArgumentSyntax attributeArgument)
+                return attributeArgument;
+
+            if (expression.Parent is AssignmentExpressionSyntax assignment &&
+                assignment.Right == expression)
+                return assignment;
+
+            return expression;
         }
 
         private static bool ResourcePathNotFoundTodoTextMatches(SyntaxTriviaList triviaList, string resourcePath)

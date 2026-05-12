@@ -148,8 +148,8 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains("res://Test/images/keywords/TestKeyword.png", diagnostics[0].GetMessage());
 
         var actions = await GetCodeActionsAsync(project, diagnostics[0]);
-        Assert.Single(actions);
-        Assert.Contains("TODO", actions[0].Title, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(actions, action => action.Title == "Insert RitsuLib TODO fix snippet");
+        Assert.Contains(actions, action => action.Title == "Insert RitsuLib TODOs for all missing resource paths in current file");
     }
 
     [Fact]
@@ -179,6 +179,133 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.DoesNotContain(diagnosticsAfterFix, d =>
             d.Id == "RITSU013" &&
             d.GetMessage().Contains("res://missing/icon.png", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResourcePathNotFoundTodoSuppressesOnlyMatchingLocation()
+    {
+        using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory();
+        Directory.CreateDirectory(projectDirectory);
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://missing/one.png");
+                    RitsuLibFramework.LoadIcon("res://missing/two.png");
+                }
+                """),
+            projectDirectory);
+
+        var diagnostics = (await AnalyzeProjectAsync(project))
+            .Where(d => d.Id == "RITSU013")
+            .ToArray();
+        Assert.Equal(2, diagnostics.Length);
+
+        var diagnostic = Assert.Single(diagnostics, d => d.GetMessage().Contains("res://missing/one.png", StringComparison.Ordinal));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Insert RitsuLib TODO fix snippet");
+        var text = await GetDocumentTextAsync(changed);
+        Assert.Contains("TODO RitsuLib analyzer: 'res://missing/one.png' was not found in the project resource index.", text);
+
+        var changedProject = Assert.Single(changed.Projects);
+        var diagnosticsAfterFix = (await AnalyzeProjectAsync(changedProject, projectDirectory))
+            .Where(d => d.Id == "RITSU013")
+            .ToArray();
+        Assert.DoesNotContain(diagnosticsAfterFix, d => d.GetMessage().Contains("res://missing/one.png", StringComparison.Ordinal));
+        Assert.Contains(diagnosticsAfterFix, d => d.GetMessage().Contains("res://missing/two.png", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResourcePathTodoCodeFixInsertsTodosForCurrentFileMissingPaths()
+    {
+        using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory();
+        Directory.CreateDirectory(projectDirectory);
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://missing/one.png");
+                    RitsuLibFramework.LoadIcon("res://missing/two.png");
+                }
+                """),
+            projectDirectory);
+
+        var diagnostics = (await AnalyzeProjectAsync(project))
+            .Where(d => d.Id == "RITSU013")
+            .ToArray();
+        Assert.Equal(2, diagnostics.Length);
+
+        var changed = await ApplyCodeFixAsync(
+            project,
+            diagnostics[0],
+            "Insert RitsuLib TODOs for all missing resource paths in current file");
+        var text = await GetDocumentTextAsync(changed);
+        Assert.Equal(2, CountOccurrences(text, "TODO RitsuLib analyzer:"));
+        Assert.Contains("res://missing/one.png", text);
+        Assert.Contains("res://missing/two.png", text);
+
+        var changedProject = Assert.Single(changed.Projects);
+        var diagnosticsAfterFix = (await AnalyzeProjectAsync(changedProject, projectDirectory))
+            .Where(d => d.Id == "RITSU013")
+            .ToArray();
+        Assert.Empty(diagnosticsAfterFix);
+    }
+
+    [Fact]
+    public async Task ResourcePathTodoCodeFixDoesNotInsertTodosInOtherFiles()
+    {
+        using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory();
+        Directory.CreateDirectory(projectDirectory);
+        var project = CreateProject(
+            Source("""
+                public static void Build()
+                {
+                    RitsuLibFramework.LoadIcon("res://missing/current.png");
+                }
+                """),
+            projectDirectory);
+        var otherDocumentId = DocumentId.CreateNewId(project.Id);
+        project = project.Solution.AddDocument(
+                otherDocumentId,
+                "Other.cs",
+                SourceText.From("""
+                    namespace ManosabaLin
+                    {
+                        internal static class OtherContent
+                        {
+                            public static void BuildOther()
+                            {
+                                STS2RitsuLib.RitsuLibFramework.LoadIcon("res://missing/other.png");
+                            }
+                        }
+                    }
+                    """, Encoding.UTF8),
+                filePath: Path.Combine(projectDirectory, "Other.cs"))
+            .GetProject(project.Id)!;
+
+        var diagnostics = (await AnalyzeProjectAsync(project))
+            .Where(d => d.Id == "RITSU013")
+            .ToArray();
+        Assert.Equal(2, diagnostics.Length);
+
+        var currentDiagnostic = Assert.Single(diagnostics, d => d.GetMessage().Contains("res://missing/current.png", StringComparison.Ordinal));
+        var changed = await ApplyCodeFixAsync(
+            project,
+            currentDiagnostic,
+            "Insert RitsuLib TODOs for all missing resource paths in current file");
+        var currentText = await GetDocumentTextAsync(changed, "Test.cs");
+        var otherText = await GetDocumentTextAsync(changed, "Other.cs");
+        Assert.Contains("TODO RitsuLib analyzer:", currentText);
+        Assert.DoesNotContain("TODO RitsuLib analyzer:", otherText);
+
+        var changedProject = Assert.Single(changed.Projects);
+        var diagnosticsAfterFix = (await AnalyzeProjectAsync(changedProject, projectDirectory))
+            .Where(d => d.Id == "RITSU013")
+            .ToArray();
+        Assert.DoesNotContain(diagnosticsAfterFix, d => d.GetMessage().Contains("res://missing/current.png", StringComparison.Ordinal));
+        Assert.Contains(diagnosticsAfterFix, d => d.GetMessage().Contains("res://missing/other.png", StringComparison.Ordinal));
     }
 
     [Fact]
