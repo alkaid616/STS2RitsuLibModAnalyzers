@@ -9,7 +9,7 @@
 在 mod 项目中引用 analyzer 包：
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.3.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.4.0" PrivateAssets="all" />
 ```
 
 包会通过 `buildTransitive` 自动收集常见文件。如果你关闭了自动收集，也可以手动把本地化 JSON 暴露给 analyzer：
@@ -139,11 +139,3 @@ dotnet msbuild C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnaly
 ```
 
 默认安装路径为 `%USERPROFILE%\.nuget\packages`，也会尊重 `NUGET_PACKAGES` 环境变量。可以用 `/p:NuGetGlobalPackagesFolder=...` 覆盖目标目录；用 `/p:InstallAnalyzerOnPack=false` 只打包不安装。
-
-手动发布到 nuget.org：
-
-```powershell
-dotnet nuget push C:\Users\Lenovo\Desktop\STS2RitsuLibModAnalyzers\RitsuLibModAnalyzer\bin\Release\Nothing.STS2RitsuLib.ModAnalyzers.0.3.0.nupkg --api-key <你的 NuGet API Key> --source https://api.nuget.org/v3/index.json
-```
-
-本包不会推断翻译文本。自动生成的值均为空字符串。
