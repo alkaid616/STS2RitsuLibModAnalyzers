@@ -119,6 +119,28 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 }
                 break;
 
+            case RitsuLibDiagnostics.ResourcePathId:
+                if (IsStubKind(diagnostic, "ResourcePath") &&
+                    TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.ResourcePath, out _))
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.AddPrefixTitle("res://"),
+                            cancellationToken => AddResourcePathPrefixAsync(context.Document, diagnostic, cancellationToken),
+                            "AddRitsuLibResourcePathResPrefix"),
+                        diagnostic);
+                }
+                else
+                {
+                    context.RegisterCodeFix(
+                        CodeAction.Create(
+                            RitsuLibUiText.InsertTodoFixTitle,
+                            cancellationToken => InsertTodoCommentAsync(context.Document, diagnostic, null, cancellationToken),
+                            "InsertRitsuLibTodoSnippet"),
+                        diagnostic);
+                }
+                return;
+
             case RitsuLibDiagnostics.MissingRegistrationId:
                 if (TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.InsertionText, out var registerText))
                 {
@@ -288,6 +310,207 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             SyntaxFactory.Literal(prefix + currentText));
 
         return document.WithSyntaxRoot(root.ReplaceNode(literal, newLiteral.WithTriviaFrom(literal)));
+    }
+
+    private static async Task<Document> AddResourcePathPrefixAsync(
+        Document document,
+        Diagnostic diagnostic,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root == null)
+            return document;
+
+        if (!TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.ResourcePath, out var resourcePath))
+            return document;
+
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel == null)
+            return document;
+
+        var expression = FindResourcePathExpression(root, diagnostic, semanticModel, resourcePath, cancellationToken);
+        if (expression == null)
+            return document;
+
+        TryGetProperty(diagnostic, RitsuLibDiagnosticProperties.SuggestedResourcePath, out var suggestedPath);
+        var resourceIndex = await RitsuLibResourcePathIndex.CreateAsync(document.Project, cancellationToken).ConfigureAwait(false);
+        var targetPath = !string.IsNullOrWhiteSpace(suggestedPath)
+            ? suggestedPath!
+            : resourceIndex.TryFindExistingResourcePath(resourcePath) ?? resourceIndex.GetFallbackResourcePath(resourcePath);
+
+        var symbols = await RitsuLibResourcePathFacts.FindResourceRootSymbolsAsync(document, cancellationToken).ConfigureAwait(false);
+        var replacementText = CreateResourcePathExpressionText(expression, resourcePath, targetPath, symbols);
+        if (replacementText == null)
+            return document;
+
+        var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
+        return document.WithText(sourceText.Replace(expression.Span, replacementText));
+    }
+
+    private static ExpressionSyntax? FindResourcePathExpression(
+        SyntaxNode root,
+        Diagnostic diagnostic,
+        SemanticModel semanticModel,
+        string resourcePath,
+        CancellationToken cancellationToken)
+    {
+        var node = FindNodeForDiagnostic(root, diagnostic);
+        var expression = FindResourcePathExpressionInNode(node, semanticModel, resourcePath, cancellationToken);
+        if (expression != null)
+            return expression;
+
+        if (!diagnostic.Location.IsInSource)
+            return null;
+
+        var token = root.FindToken(Math.Min(diagnostic.Location.SourceSpan.Start, Math.Max(0, root.FullSpan.End - 1)));
+        return token.Parent == null
+            ? null
+            : FindResourcePathExpressionInNode(token.Parent, semanticModel, resourcePath, cancellationToken);
+    }
+
+    private static ExpressionSyntax? FindResourcePathExpressionInNode(
+        SyntaxNode node,
+        SemanticModel semanticModel,
+        string resourcePath,
+        CancellationToken cancellationToken)
+    {
+        return node.DescendantNodesAndSelf()
+            .OfType<ExpressionSyntax>()
+            .Where(IsEditableResourcePathExpression)
+            .OrderBy(expression => expression.Span.Length)
+            .FirstOrDefault(expression =>
+                RitsuLibResourcePathFacts.TryResolveStringExpression(expression, semanticModel, cancellationToken, out var value) &&
+                string.Equals(value, resourcePath, StringComparison.Ordinal));
+    }
+
+    private static bool IsEditableResourcePathExpression(ExpressionSyntax expression)
+    {
+        return expression is InterpolatedStringExpressionSyntax ||
+               expression is LiteralExpressionSyntax literal &&
+               literal.IsKind(SyntaxKind.StringLiteralExpression);
+    }
+
+    private static string? CreateResourcePathExpressionText(
+        ExpressionSyntax expression,
+        string currentResourcePath,
+        string targetResourcePath,
+        ImmutableArray<ResourceRootSymbol> symbols)
+    {
+        if (!TryGetExpressionTextParts(expression, out var prefix, out var content, out var suffix))
+            return null;
+
+        var isInterpolated = expression is InterpolatedStringExpressionSyntax;
+        var currentIsResourcePath = RitsuLibResourcePathFacts.IsResourcePath(currentResourcePath);
+        var currentRelative = RitsuLibResourcePathFacts.NormalizeResourcePath(currentResourcePath);
+        if (string.IsNullOrWhiteSpace(currentRelative))
+            return null;
+
+        if (RitsuLibResourcePathFacts.TrySelectRootSymbol(targetResourcePath, symbols, out var symbol) &&
+            TryCreateSymbolRootedContent(content, currentIsResourcePath, currentRelative, targetResourcePath, symbol, isInterpolated, out var symbolContent))
+        {
+            return isInterpolated
+                ? prefix + symbolContent + suffix
+                : "$\"" + symbolContent + "\"";
+        }
+
+        if (isInterpolated &&
+            TryGetResourcePrefixToInsert(targetResourcePath, currentRelative, out var prefixToInsert))
+        {
+            var newContent = currentIsResourcePath && content.StartsWith("res://", StringComparison.OrdinalIgnoreCase)
+                ? prefixToInsert + content.Substring("res://".Length)
+                : prefixToInsert + content;
+            return prefix + newContent + suffix;
+        }
+
+        return SyntaxFactory.LiteralExpression(
+                SyntaxKind.StringLiteralExpression,
+                SyntaxFactory.Literal(targetResourcePath))
+            .ToString();
+    }
+
+    private static bool TryCreateSymbolRootedContent(
+        string content,
+        bool currentIsResourcePath,
+        string currentRelative,
+        string targetResourcePath,
+        ResourceRootSymbol symbol,
+        bool isInterpolated,
+        out string newContent)
+    {
+        newContent = string.Empty;
+        var symbolRelative = RitsuLibResourcePathFacts.NormalizeResourcePath(symbol.Value);
+        var targetRelative = RitsuLibResourcePathFacts.NormalizeResourcePath(targetResourcePath);
+        if (!targetRelative.Equals(symbolRelative, StringComparison.OrdinalIgnoreCase) &&
+            !targetRelative.StartsWith(symbolRelative + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (isInterpolated)
+        {
+            if (currentIsResourcePath && content.StartsWith("res://", StringComparison.OrdinalIgnoreCase))
+            {
+                newContent = "{" + symbol.Expression + "}/" + content.Substring("res://".Length);
+                return true;
+            }
+
+            if (targetRelative.EndsWith(currentRelative, StringComparison.OrdinalIgnoreCase))
+            {
+                newContent = "{" + symbol.Expression + "}/" + content.TrimStart('/');
+                return true;
+            }
+        }
+        else
+        {
+            var rest = targetRelative.Length == symbolRelative.Length
+                ? string.Empty
+                : targetRelative.Substring(symbolRelative.Length);
+            newContent = "{" + symbol.Expression + "}" + rest;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetResourcePrefixToInsert(
+        string targetResourcePath,
+        string currentRelative,
+        out string prefix)
+    {
+        prefix = string.Empty;
+        var targetRelative = RitsuLibResourcePathFacts.NormalizeResourcePath(targetResourcePath);
+        if (!targetRelative.EndsWith(currentRelative, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var targetPrefixRelativeLength = targetRelative.Length - currentRelative.Length;
+        if (targetPrefixRelativeLength < 0)
+            return false;
+
+        prefix = "res://" + targetRelative.Substring(0, targetPrefixRelativeLength);
+        return true;
+    }
+
+    private static bool TryGetExpressionTextParts(
+        ExpressionSyntax expression,
+        out string prefix,
+        out string content,
+        out string suffix)
+    {
+        var text = expression.ToString();
+        var firstQuote = text.IndexOf('"');
+        var lastQuote = text.LastIndexOf('"');
+        if (firstQuote < 0 || lastQuote <= firstQuote)
+        {
+            prefix = string.Empty;
+            content = string.Empty;
+            suffix = string.Empty;
+            return false;
+        }
+
+        prefix = text.Substring(0, firstQuote + 1);
+        content = text.Substring(firstQuote + 1, lastQuote - firstQuote - 1);
+        suffix = text.Substring(lastQuote);
+        return true;
     }
 
     private static async Task<Document> InsertInitializerStatementAsync(
