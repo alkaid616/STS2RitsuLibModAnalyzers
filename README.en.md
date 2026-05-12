@@ -93,9 +93,15 @@ Opt out in the consuming project:
 
 ## Rider Quick Fix
 
-Rider can load Roslyn analyzers and analyzer code fixes from NuGet packages.
-After enabling Roslyn analyzers, place the caret on a `RITSU001` highlight and
+Rider can load Roslyn analyzers, completion providers, and analyzer code fixes from NuGet packages.
+After enabling Roslyn analyzers, place the caret on a diagnostic highlight and
 press `Alt+Enter`.
+
+In Rider 2025.2+, typing `res://` inside RitsuLib resource-path arguments or
+`AssetProfile` paths suggests project resource roots, directories, files, and common
+`images/relics`, `images/cards`, `images/characters`, and `images/keywords` templates.
+If the project has statically resolvable `ResPath` / `ResourceRoot`-style static strings,
+interpolated strings can also suggest those symbols.
 
 Available fixes:
 
@@ -108,6 +114,7 @@ Available fixes:
 - `Add .Apply() to content pack` (RITSU006 / RITSU018)
 - `Generate settings callback/provider stub` (RITSU009)
 - `Generate required patch members stub` (RITSU011 / RITSU012)
+- `Add res:// prefix` (RITSU013) — completes missing resource prefixes; when one project asset matches, it completes the real resource root and prefers the project's unique root symbol.
 - `Wrap in using statement` (RITSU017) — wraps `PlayLoop` / `SubscribeLifecycle` return values in `using var`.
 - `Add event:/ prefix` (RITSU019) — prepends the missing FMOD path prefix to `AudioSource.Event` / `Snapshot` calls.
 - `Insert RitsuLib TODO fix snippet` (fallback)

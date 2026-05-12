@@ -93,8 +93,13 @@ localization/zhs.json
 
 ## Rider 快速修复
 
-Rider 可以加载 NuGet 包中的 Roslyn analyzer 和 code fix。启用 Roslyn analyzers
-后，把光标放在 `RITSU001` 高亮位置并按 `Alt+Enter`。
+Rider 可以加载 NuGet 包中的 Roslyn analyzer、completion provider 和 code fix。启用 Roslyn analyzers
+后，把光标放在诊断高亮位置并按 `Alt+Enter`。
+
+Rider 2025.2+ 中，在 RitsuLib 资源路径参数或 `AssetProfile` 路径里输入 `res://`，
+会补全项目实际资源根、目录、文件，以及常用的 `images/relics`、`images/cards`、
+`images/characters` 和 `images/keywords` 路径模板。若项目里存在可静态解析的
+`ResPath` / `ResourceRoot` 等静态字符串，也会在插值字符串中提示该符号。
 
 可用修复：
 
@@ -107,6 +112,7 @@ Rider 可以加载 NuGet 包中的 Roslyn analyzer 和 code fix。启用 Roslyn 
 - `为 content pack 添加 .Apply()`（RITSU006 / RITSU018）
 - `生成 settings callback/provider stub`（RITSU009）
 - `生成 patch 必要成员 stub`（RITSU011 / RITSU012）
+- `添加 res:// 前缀`（RITSU013）— 自动补全资源路径前缀；能唯一匹配项目资源时会补齐实际资源根，并优先复用项目内唯一的资源根符号。
 - `用 using 语句包装`（RITSU017）— 将 `PlayLoop` / `SubscribeLifecycle` 等返回值包装为 `using var`。
 - `添加 event:/ 前缀`（RITSU019）— 自动补全 `AudioSource.Event` / `Snapshot` 缺失的 FMOD 路径前缀。
 - `插入 RitsuLib TODO 修复片段`（兜底）
