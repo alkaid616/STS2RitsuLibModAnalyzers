@@ -11,7 +11,7 @@ public sealed partial class RitsuLibModAnalyzerTests
             .ToArray();
 
         Assert.Equal(
-            Enumerable.Range(1, 25).Select(number => $"RITSU{number:000}"),
+            new[] { "RITSU001", "RITSU013" },
             diagnosticIds);
     }
 }

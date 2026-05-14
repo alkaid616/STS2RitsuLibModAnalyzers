@@ -51,9 +51,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(state.AnalyzeAttribute, SyntaxKind.Attribute);
         context.RegisterSyntaxNodeAction(state.AnalyzeInvocation, SyntaxKind.InvocationExpression);
         context.RegisterSyntaxNodeAction(state.AnalyzeObjectCreation, SyntaxKind.ObjectCreationExpression, SyntaxKind.ImplicitObjectCreationExpression);
-        context.RegisterSyntaxNodeAction(state.AnalyzeTypeDeclaration, SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.RecordDeclaration);
         context.RegisterSyntaxNodeAction(state.AnalyzePropertyDeclaration, SyntaxKind.PropertyDeclaration);
-        context.RegisterSyntaxNodeAction(state.AnalyzeMethodDeclaration, SyntaxKind.MethodDeclaration);
         context.RegisterCompilationEndAction(state.ReportCompilationEnd);
     }
 
@@ -283,19 +281,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
         private readonly List<LocalizationRequirement> _requirements = new();
         private readonly List<OwnedModel> _characters = new();
         private readonly List<OwnedModel> _ancients = new();
-        private readonly List<RitsuDiagnostic> _deferredDiagnostics = new();
-        private readonly List<RegisteredPublicEntry> _publicEntries = new();
-        private readonly List<ContentPackChain> _contentPackChains = new();
-        private readonly List<SettingsPageRegistration> _settingsPages = new();
-        private readonly Dictionary<string, HashSet<string>> _settingsSectionsByPage = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, List<SettingsEntryRegistration>> _settingsEntriesByPageSection = new(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> _settingsProviderTypes = new(StringComparer.Ordinal);
         private readonly HashSet<string> _assemblyModIds = new(StringComparer.OrdinalIgnoreCase);
-        private bool _usesRitsuLib;
-        private bool _usesAutoRegistration;
-        private bool _usesGodotScriptType;
-        private bool _callsRegisterModAssembly;
-        private bool _callsEnsureGodotScriptsRegistered;
 
         public CompilationState(
             LocalizationData localization,
@@ -347,7 +333,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             AnalyzeContractAttribute(attributeName, attribute, context);
             AnalyzeOwnedRegistrationAttribute(attributeName, attribute, context);
             AnalyzeContentRegistrationAttribute(attributeName, attribute, context);
-            AnalyzeInteropAttribute(attributeName, attribute, context);
         }
 
         public void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
@@ -363,13 +348,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 var modId = GetInvocationStringArgument(invocation, method, "modId", 0, context.SemanticModel, context.CancellationToken);
                 if (!string.IsNullOrWhiteSpace(modId))
                     AddAssemblyModId(modId!);
-                MarkRegisterModAssembly(invocation, modId, context);
-                return;
-            }
-
-            if (IsEnsureGodotScriptsRegistered(methodName, method))
-            {
-                MarkEnsureGodotScriptsRegistered(invocation, context);
                 return;
             }
 
@@ -379,14 +357,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             AnalyzeI18NInvocation(invocation, method, methodName, context);
             AnalyzeSettingsLocalizationInvocation(invocation, method, methodName, context);
             AnalyzeAncientDialogueInvocation(invocation, method, methodName, context);
-            AnalyzeSettingsInvocation(invocation, method, methodName, context);
-            AnalyzeDataStoreInvocation(invocation, method, methodName, context);
-            AnalyzePatchInvocation(invocation, method, methodName, context);
-            AnalyzeResourceInvocation(invocation, method, methodName, context);
-            AnalyzeRuntimeHelperInvocation(invocation, method, methodName, context);
-            AnalyzeDisposableInvocation(invocation, method, methodName, context);
-            AnalyzeAudioSourceInvocation(invocation, method, methodName, context);
-            AnalyzeLifecycleTypeConstraint(invocation, method, methodName, context);
         }
 
         public void ReportCompilationEnd(CompilationAnalysisContext context)
@@ -432,8 +402,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                     ReportMissingLocalization(context, requirement);
                 }
             }
-
-            ReportContractCompilationEnd(context, fallbackOwner, assemblyModIds);
         }
 
         private void AnalyzeOwnedRegistrationAttribute(
@@ -692,7 +660,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             var model = new OwnedModel(info.DisplayName, info.CategoryStem, typeName, publicEntryOverride, ownerModId, location);
             AddRequirement(context, new ModelLocalizationRequirement(model, info.Templates));
-            AddPublicEntry(info, typeName, publicEntryOverride, ownerModId, location);
 
             if (info.CategoryStem == "CHARACTER")
                 AddCharacter(model);
