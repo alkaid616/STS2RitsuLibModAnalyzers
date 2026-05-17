@@ -36,7 +36,7 @@ Languages are discovered from `localization/<language>` directories; an empty la
 
 | ID | Severity | Description |
 | --- | --- | --- |
-| `RITSU001` | Error / Warning | Missing RitsuLib localization keys; missing `eng` fallback keys are errors, while other languages are warnings when `eng` already has that key. |
+| `RITSU001` | Error / Warning | Missing RitsuLib localization keys; missing keys are warnings when another language already has that key, otherwise errors. |
 | `RITSU013` | Warning | Resource path shape or existence issue. |
 
 `RITSU001` checks:
@@ -49,7 +49,7 @@ Languages are discovered from `localization/<language>` directories; an empty la
 - `*LocKey` / `*Key` named parameters on ModSettings attributes
 - `WithSharedTooltip` / `WithTooltip` dynamic var tooltips
 
-`RITSU001` computes severity per key: missing `eng` keys are errors; missing non-`eng` keys are errors when `eng` is also missing the key, and warnings when `eng` already has it. Mixed errors and warnings in the same JSON are reported as separate diagnostics.
+`RITSU001` computes severity per key: missing `eng` keys are warnings when any non-`eng` language already has the key, otherwise errors; missing non-`eng` keys are errors when `eng` is also missing the key, and warnings when `eng` already has it. Mixed errors and warnings in the same JSON are reported as separate diagnostics.
 
 ## Automatic AdditionalFiles
 

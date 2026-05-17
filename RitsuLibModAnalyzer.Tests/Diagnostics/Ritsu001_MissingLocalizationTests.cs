@@ -32,7 +32,7 @@ public sealed partial class RitsuLibModAnalyzerTests
     }
 
     [Fact]
-    public async Task ReportsMissingEnglishCardKeywordLocalizationAsError()
+    public async Task ReportsMissingEnglishCardKeywordLocalizationAsWarningWhenNonEnglishHasKey()
     {
         using var culture = UseCulture("en-US");
         var diagnostics = await AnalyzeAsync(
@@ -49,9 +49,29 @@ public sealed partial class RitsuLibModAnalyzerTests
             """));
 
         var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
-        Assert.Equal(DiagnosticSeverity.Error, missing.Severity);
+        Assert.Equal(DiagnosticSeverity.Warning, missing.Severity);
         Assert.StartsWith("Missing RitsuLib localization keys: eng/card_keywords.json:", missing.GetMessage(), StringComparison.Ordinal);
         Assert.Contains("eng/card_keywords.json", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_KEYWORD_HIRO.title", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_KEYWORD_HIRO.description", missing.GetMessage());
+    }
+
+    [Fact]
+    public async Task ReportsMissingEnglishCardKeywordLocalizationAsErrorWhenNoOtherLanguageHasKey()
+    {
+        using var culture = UseCulture("en-US");
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\card_keywords.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\zhs\card_keywords.json", "{}"));
+
+        var missing = Assert.Single(diagnostics.Where(d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("eng/card_keywords.json")));
+        Assert.Equal(DiagnosticSeverity.Error, missing.Severity);
         Assert.Contains("MANOSABA_LIN_KEYWORD_HIRO.title", missing.GetMessage());
         Assert.Contains("MANOSABA_LIN_KEYWORD_HIRO.description", missing.GetMessage());
     }

@@ -739,13 +739,33 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
         private DiagnosticSeverity GetMissingLocalizationSeverity(string language, bool isI18N, string table, string key)
         {
             if (string.Equals(RitsuLibAdditionalFileIndex.NormalizeLanguageCode(language), "eng", StringComparison.OrdinalIgnoreCase))
-                return DiagnosticSeverity.Error;
+                return AnyNonEnglishLanguageHasKey(isI18N, table, key)
+                    ? DiagnosticSeverity.Warning
+                    : DiagnosticSeverity.Error;
 
             var fallbackHasKey = isI18N
                 ? _localization.ContainsI18N("eng", key)
                 : _localization.ContainsTable("eng", table, key);
 
             return fallbackHasKey ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error;
+        }
+
+        private bool AnyNonEnglishLanguageHasKey(bool isI18N, string table, string key)
+        {
+            foreach (var language in _localization.Languages)
+            {
+                if (string.Equals(RitsuLibAdditionalFileIndex.NormalizeLanguageCode(language), "eng", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (isI18N
+                    ? _localization.ContainsI18N(language, key)
+                    : _localization.ContainsTable(language, table, key))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static ImmutableArray<LocalizationTemplate> CreateOwnedAttributeTemplates(

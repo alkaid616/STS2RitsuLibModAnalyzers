@@ -36,7 +36,7 @@ localization/zhs.json
 
 | ID | 严重级别 | 说明 |
 | --- | --- | --- |
-| `RITSU001` | Error / Warning | 已发现语言的 JSON 文件中缺少 RitsuLib 本地化键；`eng` fallback 缺失为 Error，其他语言在 `eng` 已有该 key 时为 Warning。 |
+| `RITSU001` | Error / Warning | 已发现语言的 JSON 文件中缺少 RitsuLib 本地化键；缺失 key 在其他语言已有翻译时为 Warning，否则为 Error。 |
 | `RITSU013` | Warning | 资源路径形状或存在性问题。 |
 
 `RITSU001` 会检查：
@@ -49,7 +49,7 @@ localization/zhs.json
 - ModSettings 属性中的 `*LocKey` / `*Key` 参数
 - `WithSharedTooltip` / `WithTooltip` 动态变量提示
 
-`RITSU001` 按 key 单独判断严重级别：`eng` 缺失为 Error；非 `eng` 语言缺失且 `eng` 也缺失为 Error；非 `eng` 语言缺失但 `eng` 已存在为 Warning。同一 JSON 内混合 Error / Warning 时会拆成多条诊断。
+`RITSU001` 按 key 单独判断严重级别：`eng` 缺失但任一非 `eng` 语言已存在该 key 时为 Warning，否则为 Error；非 `eng` 语言缺失且 `eng` 也缺失为 Error，`eng` 已存在时为 Warning。同一 JSON 内混合 Error / Warning 时会拆成多条诊断。
 
 ## 自动 AdditionalFiles
 
