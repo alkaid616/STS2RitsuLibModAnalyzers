@@ -239,6 +239,61 @@ public sealed partial class RitsuLibModAnalyzerTests
     }
 
     [Fact]
+    public async Task ReportsContentModelKeysForRegistryPowerRegistration()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void RegisterContent()
+                {
+                    RitsuLibFramework.GetContentRegistry(MainFile.ModId)
+                        .RegisterPower<MyPower>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\powers.json", "{}"));
+
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.smartDescription"));
+    }
+
+    [Fact]
+    public async Task DoesNotReportModelDbPowerUsedByTemporaryPowerInternalPower()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class TempStrengthPower : ModTemporaryPowerTemplate
+                {
+                    public override AbstractModel OriginModel => null!;
+                    public override PowerModel InternallyAppliedPower => ModelDb.Power<StrengthPower>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\powers.json", "{}"));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
+    }
+
+    [Fact]
+    public async Task RegisteredTemporaryPowerReportsOnlyWrapperLocalizationKeys()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [RegisterPower]
+                public sealed class TempStrengthPower : ModTemporaryPowerTemplate
+                {
+                    public override AbstractModel OriginModel => null!;
+                    public override PowerModel InternallyAppliedPower => ModelDb.Power<StrengthPower>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\powers.json", "{}"));
+
+        var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        Assert.Contains("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.title", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.description", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.smartDescription", missing.GetMessage());
+        Assert.DoesNotContain("MANOSABA_LIN_POWER_STRENGTH_POWER", missing.GetMessage());
+    }
+
+    [Fact]
     public async Task ReportsContentModelPublicEntryOverrides()
     {
         var diagnostics = await AnalyzeAsync(
@@ -300,6 +355,62 @@ public sealed partial class RitsuLibModAnalyzerTests
     }
 
     [Fact]
+    public async Task ReportsModSettingsTextLocalizationKeys()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void UseSettingsText()
+                {
+                    var i18n = RitsuLibFramework.CreateModLocalization(MainFile.ModId, "settings");
+                    _ = ModSettingsText.I18N(i18n, "settings.title", "Title");
+                    _ = ModSettingsText.LocString("settings_ui", "settings.description", "Description");
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\eng\settings_ui.json", "{}"));
+
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("eng.json") &&
+            d.GetMessage().Contains("settings.title"));
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("settings_ui.json") &&
+            d.GetMessage().Contains("settings.description"));
+    }
+
+    [Fact]
+    public async Task ReportsDynamicVarTooltipLocalizationKeys()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void UseDynamicVars()
+                {
+                    _ = new IntVar("Heat", 0)
+                        .WithSharedTooltip("MY_MOD_HEAT");
+                    _ = new IntVar("Frost", 0)
+                        .WithTooltip(
+                            "static_hover_tips",
+                            "MY_MOD_FROST.title",
+                            descriptionTable: "static_hover_tips",
+                            descriptionKey: "MY_MOD_FROST.description");
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\static_hover_tips.json", "{}"));
+
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MY_MOD_HEAT.title") &&
+            d.GetMessage().Contains("MY_MOD_HEAT.description"));
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MY_MOD_FROST.title"));
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MY_MOD_FROST.description"));
+    }
+
+    [Fact]
     public async Task ReportsAncientDialogueKeys()
     {
         var diagnostics = await AnalyzeAsync(
@@ -336,6 +447,82 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains(diagnostics, d =>
             d.Id == AnalyzerUnderTest.MissingLocalizationId &&
             d.GetMessage().Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0.char"));
+    }
+
+    [Fact]
+    public async Task DoesNotReportSameNamedNonRitsuLibLocalizationHelpers()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class LocalKeywordRegistry
+                {
+                    public static LocalKeywordRegistry For(string modId) => new();
+                    public void RegisterOwned(string localStem) { }
+                    public void RegisterCardKeywordOwnedByLocNamespace(string localStem) { }
+                }
+
+                public sealed class LocalPack
+                {
+                    public LocalPack CardKeywordOwnedByLocNamespace(string localStem) => this;
+                    public LocalPack KeywordOwned(string localStem) => this;
+                }
+
+                public sealed class LocalI18N
+                {
+                    public bool ContainsKey(string key) => false;
+                    public bool TryGet(string key, out string value) { value = ""; return false; }
+                    public string Get(string key, string fallback) => fallback;
+                }
+
+                public static class LocalAncientDialogueLocalization
+                {
+                    public static void GetDialoguesForKey(string locTable, string baseKey) { }
+                    public static void BuildDialogueSetForModAncient(string ancientEntry) { }
+                }
+
+                public static class LocalModSettingsText
+                {
+                    public static object I18N(LocalI18N localization, string key, string fallback) => new();
+                    public static object LocString(string table, string key, string fallback) => new();
+                }
+
+                public sealed class LocalDynamicVar
+                {
+                    public LocalDynamicVar WithSharedTooltip(string entryPrefix) => this;
+                    public LocalDynamicVar WithTooltip(string titleTable, string titleKey, string descriptionTable, string descriptionKey) => this;
+                }
+
+                public static void UseSameNamedHelpers()
+                {
+                    LocalKeywordRegistry.For(MainFile.ModId).RegisterOwned("fake");
+                    LocalKeywordRegistry.For(MainFile.ModId).RegisterCardKeywordOwnedByLocNamespace("fake");
+                    new LocalPack()
+                        .CardKeywordOwnedByLocNamespace("fake")
+                        .KeywordOwned("fake");
+
+                    var i18n = new LocalI18N();
+                    _ = i18n.ContainsKey("settings.fake");
+                    _ = i18n.TryGet("settings.other", out var _);
+                    _ = i18n.Get("settings.more", "");
+
+                    LocalAncientDialogueLocalization.GetDialoguesForKey("ancients", "FAKE.");
+                    LocalAncientDialogueLocalization.BuildDialogueSetForModAncient("FAKE_ANCIENT");
+
+                    _ = LocalModSettingsText.I18N(i18n, "settings.fake", "");
+                    _ = LocalModSettingsText.LocString("settings_ui", "settings.fake", "");
+
+                    _ = new LocalDynamicVar()
+                        .WithSharedTooltip("FAKE_TIP")
+                        .WithTooltip("static_hover_tips", "FAKE.title", "static_hover_tips", "FAKE.description");
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\eng\ancients.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\eng\card_keywords.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\eng\settings_ui.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\eng\static_hover_tips.json", "{}"));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
     }
 
     [Fact]

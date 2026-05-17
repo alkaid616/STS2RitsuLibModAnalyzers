@@ -458,6 +458,9 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             if (methodName == "RegisterCardKeywordOwnedByLocNamespace")
             {
+                if (!IsRitsuLibOwnedRegistrationMethod(method, methodName, invocation, semanticModel, cancellationToken))
+                    return;
+
                 var ownerModId = ResolveReceiverModId(invocation, semanticModel, cancellationToken);
                 var localStem = GetInvocationStringArgument(invocation, method, "localKeywordStem", 0, semanticModel, cancellationToken);
                 AddCompoundRequirement(context, localStem, "KEYWORD", ownerModId, invocation.GetLocation(),
@@ -467,6 +470,9 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             if (methodName == "CardKeywordOwnedByLocNamespace")
             {
+                if (!IsRitsuLibOwnedRegistrationMethod(method, methodName, invocation, semanticModel, cancellationToken))
+                    return;
+
                 var ownerModId = ResolveReceiverModId(invocation, semanticModel, cancellationToken);
                 var localStem = GetInvocationStringArgument(invocation, method, "localKeywordStem", 0, semanticModel, cancellationToken);
                 AddCompoundRequirement(context, localStem, "KEYWORD", ownerModId, invocation.GetLocation(),
@@ -476,6 +482,9 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             if (methodName == "KeywordOwned")
             {
+                if (!IsRitsuLibOwnedRegistrationMethod(method, methodName, invocation, semanticModel, cancellationToken))
+                    return;
+
                 var ownerModId = ResolveReceiverModId(invocation, semanticModel, cancellationToken);
                 var localStem = GetInvocationStringArgument(invocation, method, "localKeywordStem", 0, semanticModel, cancellationToken);
                 AddCompoundRequirement(context, localStem, "KEYWORD", ownerModId, invocation.GetLocation(),
@@ -486,24 +495,27 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             if (methodName != "RegisterOwned")
                 return;
 
-            var containingTypeName = method?.ContainingType?.Name;
+            if (!IsRitsuLibOwnedRegistrationMethod(method, methodName, invocation, semanticModel, cancellationToken))
+                return;
+
+            var containingType = ResolveInvocationContainingType(invocation, method, semanticModel, cancellationToken);
             var receiverOwner = ResolveReceiverModId(invocation, semanticModel, cancellationToken);
             var stem = GetInvocationStringArgument(invocation, method, "localKeywordStem", 0, semanticModel, cancellationToken)
                        ?? GetInvocationStringArgument(invocation, method, "localStem", 0, semanticModel, cancellationToken)
                        ?? GetInvocationStringArgument(invocation, method, "localButtonStem", 0, semanticModel, cancellationToken)
                        ?? GetInvocationStringArgument(invocation, method, "localPileStem", 0, semanticModel, cancellationToken);
 
-            switch (containingTypeName)
+            switch (containingType?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat))
             {
-                case "ModKeywordRegistry":
+                case "STS2RitsuLib.Keywords.ModKeywordRegistry":
                     AddCompoundRequirement(context, stem, "KEYWORD", receiverOwner, invocation.GetLocation(),
                         "keyword", CreateInvocationOwnedKeywordTemplates(invocation, method, semanticModel, cancellationToken));
                     break;
-                case "ModCardPileRegistry":
+                case "STS2RitsuLib.CardPiles.ModCardPileRegistry":
                     AddCompoundRequirement(context, stem, "CARDPILE", receiverOwner, invocation.GetLocation(),
                         "card pile", CardPileTemplates());
                     break;
-                case "ModTopBarButtonRegistry":
+                case "STS2RitsuLib.TopBar.ModTopBarButtonRegistry":
                     AddCompoundRequirement(context, stem, "TOPBARBUTTON", receiverOwner, invocation.GetLocation(),
                         "top-bar button", TopBarButtonTemplates());
                     break;
@@ -517,6 +529,14 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             SyntaxNodeAnalysisContext context)
         {
             if (!TryGetInvocationContentInfo(methodName, out var info))
+                return;
+
+            if (!IsRitsuLibContentRegistrationInvocation(
+                    invocation,
+                    method,
+                    methodName,
+                    context.SemanticModel,
+                    context.CancellationToken))
                 return;
 
             var ownerModId = ResolveReceiverModId(invocation, context.SemanticModel, context.CancellationToken);
@@ -537,7 +557,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             if (methodName is not ("Get" or "TryGet" or "ContainsKey"))
                 return;
 
-            if (method != null && method.ContainingType?.Name != "I18N")
+            if (!IsRitsuLibI18NMethod(method, invocation, context.SemanticModel, context.CancellationToken))
                 return;
 
             var key = GetInvocationStringArgument(invocation, method, "key", 0, context.SemanticModel, context.CancellationToken);
@@ -557,7 +577,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             string methodName,
             SyntaxNodeAnalysisContext context)
         {
-            if (methodName == "I18N" && method?.ContainingType?.Name == "ModSettingsText")
+            if (methodName == "I18N" && IsRitsuLibModSettingsTextMethod(method, invocation, context.SemanticModel, context.CancellationToken))
             {
                 var key = GetInvocationStringArgument(invocation, method, "key", 1, context.SemanticModel, context.CancellationToken);
                 if (string.IsNullOrWhiteSpace(key))
@@ -571,7 +591,8 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (methodName != "LocString" || method?.ContainingType?.Name != "ModSettingsText")
+            if (methodName != "LocString" ||
+                !IsRitsuLibModSettingsTextMethod(method, invocation, context.SemanticModel, context.CancellationToken))
                 return;
 
             var table = GetInvocationStringArgument(invocation, method, "table", 0, context.SemanticModel, context.CancellationToken);
@@ -595,6 +616,9 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
         {
             if (methodName == "GetDialoguesForKey")
             {
+                if (!IsRitsuLibAncientDialogueMethod(method, invocation, context.SemanticModel, context.CancellationToken))
+                    return;
+
                 var table = GetInvocationStringArgument(invocation, method, "locTable", 0, context.SemanticModel, context.CancellationToken);
                 var baseKey = GetInvocationStringArgument(invocation, method, "baseKey", 1, context.SemanticModel, context.CancellationToken);
                 if (string.IsNullOrWhiteSpace(table) || string.IsNullOrWhiteSpace(baseKey))
@@ -611,6 +635,9 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             if (methodName == "BuildDialogueSetForModAncient")
             {
+                if (!IsRitsuLibAncientDialogueMethod(method, invocation, context.SemanticModel, context.CancellationToken))
+                    return;
+
                 var ancientEntry = GetInvocationStringArgument(invocation, method, "ancientEntry", 0, context.SemanticModel, context.CancellationToken);
                 if (string.IsNullOrWhiteSpace(ancientEntry))
                     return;
@@ -922,6 +949,335 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 _ => default,
             };
             return info.DisplayName != null;
+        }
+
+        private static bool IsRitsuLibContentRegistrationInvocation(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol? method,
+            string methodName,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (method != null)
+                return IsRitsuLibContentRegistrationMethod(method);
+
+            if (methodName.StartsWith("Register", StringComparison.Ordinal))
+                return IsObviousRitsuLibRegistryReceiver(
+                    GetInvocationReceiver(invocation),
+                    semanticModel,
+                    cancellationToken);
+
+            return IsObviousRitsuLibContentPackReceiver(
+                GetInvocationReceiver(invocation),
+                semanticModel,
+                cancellationToken);
+        }
+
+        private static bool IsRitsuLibContentRegistrationMethod(IMethodSymbol method)
+        {
+            var containingType = method.ContainingType;
+            if (IsNamedType(containingType, "STS2RitsuLib.Content.ModContentRegistry"))
+                return method.Name.StartsWith("Register", StringComparison.Ordinal);
+
+            return IsNamedType(containingType, "STS2RitsuLib.Scaffolding.Content.ModContentPackBuilder");
+        }
+
+        private static bool IsRitsuLibOwnedRegistrationMethod(
+            IMethodSymbol? method,
+            string methodName,
+            InvocationExpressionSyntax invocation,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var containingType = ResolveInvocationContainingType(invocation, method, semanticModel, cancellationToken);
+            if (method != null)
+            {
+                return methodName switch
+                {
+                    "RegisterOwned" => IsNamedType(containingType, "STS2RitsuLib.Keywords.ModKeywordRegistry") ||
+                                       IsNamedType(containingType, "STS2RitsuLib.CardPiles.ModCardPileRegistry") ||
+                                       IsNamedType(containingType, "STS2RitsuLib.TopBar.ModTopBarButtonRegistry"),
+                    "RegisterCardKeywordOwnedByLocNamespace" => IsNamedType(containingType, "STS2RitsuLib.Keywords.ModKeywordRegistry"),
+                    "CardKeywordOwnedByLocNamespace" or "KeywordOwned" => IsNamedType(containingType, "STS2RitsuLib.Scaffolding.Content.ModContentPackBuilder"),
+                    _ => false,
+                };
+            }
+
+            var receiver = GetInvocationReceiver(invocation);
+            return methodName switch
+            {
+                "RegisterOwned" => IsObviousRitsuLibOwnedRegistryReceiver(receiver, semanticModel, cancellationToken),
+                "RegisterCardKeywordOwnedByLocNamespace" => IsObviousRitsuLibKeywordRegistryReceiver(receiver, semanticModel, cancellationToken),
+                "CardKeywordOwnedByLocNamespace" or "KeywordOwned" => IsObviousRitsuLibContentPackReceiver(receiver, semanticModel, cancellationToken),
+                _ => false,
+            };
+        }
+
+        private static bool IsRitsuLibI18NMethod(
+            IMethodSymbol? method,
+            InvocationExpressionSyntax invocation,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var containingType = ResolveInvocationContainingType(invocation, method, semanticModel, cancellationToken);
+            return method != null
+                ? IsNamedType(containingType, "STS2RitsuLib.Utils.I18N")
+                : IsObviousRitsuLibI18NReceiver(GetInvocationReceiver(invocation), semanticModel, cancellationToken);
+        }
+
+        private static bool IsRitsuLibAncientDialogueMethod(
+            IMethodSymbol? method,
+            InvocationExpressionSyntax invocation,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var containingType = ResolveInvocationContainingType(invocation, method, semanticModel, cancellationToken);
+            return method != null
+                ? IsNamedType(containingType, "STS2RitsuLib.Localization.AncientDialogueLocalization")
+                : string.Equals(GetInvocationReceiver(invocation)?.ToString(), "AncientDialogueLocalization", StringComparison.Ordinal);
+        }
+
+        private static bool IsRitsuLibModSettingsTextMethod(
+            IMethodSymbol? method,
+            InvocationExpressionSyntax invocation,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            var containingType = ResolveInvocationContainingType(invocation, method, semanticModel, cancellationToken);
+            return method != null
+                ? IsNamedType(containingType, "STS2RitsuLib.Settings.ModSettingsText")
+                : string.Equals(GetInvocationReceiver(invocation)?.ToString(), "ModSettingsText", StringComparison.Ordinal);
+        }
+
+        private static INamedTypeSymbol? ResolveInvocationContainingType(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol? method,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (method?.ContainingType != null)
+                return method.ContainingType;
+
+            return GetInvocationReceiver(invocation) == null
+                ? null
+                : semanticModel.GetTypeInfo(GetInvocationReceiver(invocation)!, cancellationToken).Type as INamedTypeSymbol;
+        }
+
+        private static bool IsObviousRitsuLibRegistryReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            return IsObviousRitsuLibContentReceiver(
+                receiver,
+                semanticModel,
+                cancellationToken,
+                allowContentPackBuilder: false,
+                allowContentRegistry: true);
+        }
+
+        private static bool IsObviousRitsuLibKeywordRegistryReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (receiver == null)
+                return false;
+
+            receiver = Unwrap(receiver);
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            if (IsNamedType(receiverType, "STS2RitsuLib.Keywords.ModKeywordRegistry"))
+                return true;
+
+            if (receiver is not InvocationExpressionSyntax invocation)
+                return false;
+
+            var invokedMethod = semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol as IMethodSymbol;
+            if (invokedMethod != null)
+            {
+                if (invokedMethod.Name == "GetKeywordRegistry" &&
+                    IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.RitsuLibFramework"))
+                {
+                    return true;
+                }
+
+                if (invokedMethod.Name == "For" &&
+                    IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.Keywords.ModKeywordRegistry"))
+                {
+                    return true;
+                }
+            }
+
+            var invokedName = GetInvokedMemberName(invocation);
+            var receiverName = GetInvocationReceiver(invocation)?.ToString();
+            return (invokedName == "GetKeywordRegistry" && receiverName == "RitsuLibFramework") ||
+                   (invokedName == "For" && receiverName is "ModKeywordRegistry" or "STS2RitsuLib.Keywords.ModKeywordRegistry");
+        }
+
+        private static bool IsObviousRitsuLibOwnedRegistryReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (receiver == null)
+                return false;
+
+            receiver = Unwrap(receiver);
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            if (IsNamedType(receiverType, "STS2RitsuLib.Keywords.ModKeywordRegistry") ||
+                IsNamedType(receiverType, "STS2RitsuLib.CardPiles.ModCardPileRegistry") ||
+                IsNamedType(receiverType, "STS2RitsuLib.TopBar.ModTopBarButtonRegistry"))
+            {
+                return true;
+            }
+
+            if (receiver is not InvocationExpressionSyntax invocation)
+                return false;
+
+            var invokedMethod = semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol as IMethodSymbol;
+            if (invokedMethod != null &&
+                invokedMethod.Name == "For" &&
+                (IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.Keywords.ModKeywordRegistry") ||
+                 IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.CardPiles.ModCardPileRegistry") ||
+                 IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.TopBar.ModTopBarButtonRegistry")))
+            {
+                return true;
+            }
+
+            var invokedName = GetInvokedMemberName(invocation);
+            var receiverName = GetInvocationReceiver(invocation)?.ToString();
+            return invokedName == "For" &&
+                   receiverName is "ModKeywordRegistry" or "STS2RitsuLib.Keywords.ModKeywordRegistry" or
+                       "ModCardPileRegistry" or "STS2RitsuLib.CardPiles.ModCardPileRegistry" or
+                       "ModTopBarButtonRegistry" or "STS2RitsuLib.TopBar.ModTopBarButtonRegistry";
+        }
+
+        private static bool IsObviousRitsuLibI18NReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (receiver == null)
+                return false;
+
+            receiver = Unwrap(receiver);
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            if (IsNamedType(receiverType, "STS2RitsuLib.Utils.I18N"))
+                return true;
+
+            if (receiver is not InvocationExpressionSyntax invocation)
+                return false;
+
+            var invokedMethod = semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol as IMethodSymbol;
+            if (invokedMethod != null)
+            {
+                return invokedMethod.Name == "CreateModLocalization" &&
+                       IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.RitsuLibFramework");
+            }
+
+            return GetInvokedMemberName(invocation) == "CreateModLocalization" &&
+                   string.Equals(GetInvocationReceiver(invocation)?.ToString(), "RitsuLibFramework", StringComparison.Ordinal);
+        }
+
+        private static bool IsObviousRitsuLibContentPackReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            return IsObviousRitsuLibContentReceiver(
+                receiver,
+                semanticModel,
+                cancellationToken,
+                allowContentPackBuilder: true,
+                allowContentRegistry: false);
+        }
+
+        private static bool IsObviousRitsuLibContentReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken,
+            bool allowContentPackBuilder,
+            bool allowContentRegistry)
+        {
+            if (receiver == null)
+                return false;
+
+            receiver = Unwrap(receiver);
+
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            if (allowContentRegistry && IsNamedType(receiverType, "STS2RitsuLib.Content.ModContentRegistry"))
+                return true;
+            if (allowContentPackBuilder && IsNamedType(receiverType, "STS2RitsuLib.Scaffolding.Content.ModContentPackBuilder"))
+                return true;
+
+            if (receiver is InvocationExpressionSyntax invocation)
+            {
+                var invokedMethod = semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol as IMethodSymbol;
+                if (invokedMethod != null)
+                {
+                    var invokedType = invokedMethod.ContainingType;
+                    if (allowContentRegistry &&
+                        invokedMethod.Name == "GetContentRegistry" &&
+                        IsNamedType(invokedType, "STS2RitsuLib.RitsuLibFramework"))
+                    {
+                        return true;
+                    }
+
+                    if (allowContentRegistry &&
+                        invokedMethod.Name == "For" &&
+                        IsNamedType(invokedType, "STS2RitsuLib.Content.ModContentRegistry"))
+                    {
+                        return true;
+                    }
+
+                    if (allowContentPackBuilder &&
+                        invokedMethod.Name == "CreateContentPack" &&
+                        IsNamedType(invokedType, "STS2RitsuLib.RitsuLibFramework"))
+                    {
+                        return true;
+                    }
+
+                    if (allowContentPackBuilder &&
+                        invokedMethod.Name == "For" &&
+                        IsNamedType(invokedType, "STS2RitsuLib.Scaffolding.Content.ModContentPackBuilder"))
+                    {
+                        return true;
+                    }
+                }
+
+                if (IsObviousRitsuLibFactoryInvocation(invocation, allowContentPackBuilder, allowContentRegistry))
+                    return true;
+
+                return IsObviousRitsuLibContentReceiver(
+                    GetInvocationReceiver(invocation),
+                    semanticModel,
+                    cancellationToken,
+                    allowContentPackBuilder,
+                    allowContentRegistry);
+            }
+
+            return false;
+        }
+
+        private static bool IsObviousRitsuLibFactoryInvocation(
+            InvocationExpressionSyntax invocation,
+            bool allowContentPackBuilder,
+            bool allowContentRegistry)
+        {
+            var invokedName = GetInvokedMemberName(invocation);
+            var receiverName = GetInvocationReceiver(invocation)?.ToString();
+
+            return (allowContentRegistry &&
+                    ((invokedName == "GetContentRegistry" && receiverName == "RitsuLibFramework") ||
+                     (invokedName == "For" && receiverName is "ModContentRegistry" or "STS2RitsuLib.Content.ModContentRegistry"))) ||
+                   (allowContentPackBuilder &&
+                    ((invokedName == "CreateContentPack" && receiverName == "RitsuLibFramework") ||
+                     (invokedName == "For" && receiverName is "ModContentPackBuilder" or "STS2RitsuLib.Scaffolding.Content.ModContentPackBuilder")));
+        }
+
+        private static bool IsNamedType(INamedTypeSymbol? type, string metadataName)
+        {
+            return string.Equals(type?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat), metadataName, StringComparison.Ordinal);
         }
 
         private static bool IsRegisterModAssembly(string methodName, IMethodSymbol? method)

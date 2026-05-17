@@ -124,6 +124,9 @@ public sealed partial class RitsuLibModAnalyzer
         {
             if (methodName == "WithSharedTooltip")
             {
+                if (!IsRitsuLibDynamicVarTooltipMethod(method, invocation, context.SemanticModel, context.CancellationToken))
+                    return;
+
                 var prefix = GetInvocationStringArgument(invocation, method, "entryPrefix", 0, context.SemanticModel, context.CancellationToken);
                 if (string.IsNullOrWhiteSpace(prefix))
                     return;
@@ -138,6 +141,9 @@ public sealed partial class RitsuLibModAnalyzer
             }
 
             if (methodName != "WithTooltip")
+                return;
+
+            if (!IsRitsuLibDynamicVarTooltipMethod(method, invocation, context.SemanticModel, context.CancellationToken))
                 return;
 
             var titleTable = GetInvocationStringArgument(invocation, method, "titleTable", 1, context.SemanticModel, context.CancellationToken);
@@ -158,6 +164,23 @@ public sealed partial class RitsuLibModAnalyzer
                     invocation.GetLocation(),
                     descTable!,
                     ImmutableArray.Create(descKey!)));
+        }
+
+        private static bool IsRitsuLibDynamicVarTooltipMethod(
+            IMethodSymbol? method,
+            InvocationExpressionSyntax invocation,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (method != null)
+                return IsNamedType(method.ContainingType, "STS2RitsuLib.Cards.DynamicVars.DynamicVarExtensions");
+
+            var receiver = GetInvocationReceiver(invocation);
+            if (receiver == null)
+                return false;
+
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            return IsNamedType(receiverType, "MegaCrit.Sts2.Core.Localization.DynamicVars.DynamicVar");
         }
 
         // RITSU013: Resource path analysis

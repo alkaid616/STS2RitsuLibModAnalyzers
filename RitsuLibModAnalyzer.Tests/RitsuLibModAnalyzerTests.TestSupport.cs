@@ -29,9 +29,13 @@ public sealed partial class RitsuLibModAnalyzerTests
         return $$"""
             using System;
             using System.Reflection;
+            using MegaCrit.Sts2.Core.Localization.DynamicVars;
+            using MegaCrit.Sts2.Core.Models;
+            using MegaCrit.Sts2.Core.Models.Powers;
             using STS2RitsuLib;
             using STS2RitsuLib.Audio;
             using STS2RitsuLib.CardPiles;
+            using STS2RitsuLib.Cards.DynamicVars;
             using STS2RitsuLib.Scaffolding.Characters;
             using STS2RitsuLib.Content;
             using STS2RitsuLib.Interop;
@@ -39,6 +43,7 @@ public sealed partial class RitsuLibModAnalyzerTests
             using STS2RitsuLib.Keywords;
             using STS2RitsuLib.Localization;
             using STS2RitsuLib.Data;
+            using STS2RitsuLib.Combat.Powers;
             using STS2RitsuLib.Patching.Builders;
             using STS2RitsuLib.Patching.Core;
             using STS2RitsuLib.Patching.Models;
@@ -178,6 +183,49 @@ public sealed partial class RitsuLibModAnalyzerTests
                 }
             }
 
+            namespace MegaCrit.Sts2.Core.Models
+            {
+                public abstract class AbstractModel { }
+                public abstract class PowerModel : AbstractModel { }
+
+                public static class ModelDb
+                {
+                    public static T Power<T>() where T : PowerModel => null!;
+                }
+            }
+
+            namespace MegaCrit.Sts2.Core.Models.Powers
+            {
+                public sealed class StrengthPower : PowerModel { }
+            }
+
+            namespace MegaCrit.Sts2.Core.Localization.DynamicVars
+            {
+                public class DynamicVar { }
+                public sealed class IntVar : DynamicVar
+                {
+                    public IntVar(string name, int value) { }
+                }
+            }
+
+            namespace STS2RitsuLib.Cards.DynamicVars
+            {
+                public static class DynamicVarExtensions
+                {
+                    public static DynamicVar WithSharedTooltip(this DynamicVar dynamicVar, string entryPrefix, string? iconPath = null) => dynamicVar;
+                    public static DynamicVar WithTooltip(this DynamicVar dynamicVar, string titleTable, string titleKey, string? descriptionTable = null, string? descriptionKey = null, string? iconPath = null) => dynamicVar;
+                }
+            }
+
+            namespace STS2RitsuLib.Combat.Powers
+            {
+                public abstract class ModTemporaryPowerTemplate : ModPowerTemplate
+                {
+                    public abstract AbstractModel OriginModel { get; }
+                    public abstract PowerModel InternallyAppliedPower { get; }
+                }
+            }
+
             namespace STS2RitsuLib.Keywords
             {
                 public sealed class ModKeywordRegistry
@@ -231,6 +279,12 @@ public sealed partial class RitsuLibModAnalyzerTests
 
             namespace STS2RitsuLib.Settings
             {
+                public abstract class ModSettingsText
+                {
+                    public static ModSettingsText I18N(I18N localization, string key, string fallback) => null!;
+                    public static ModSettingsText LocString(string table, string key, string fallback) => null!;
+                }
+
                 public sealed class ModSettingsPageBuilder
                 {
                     public ModSettingsSectionBuilder AddSection(string id, string? title = null) => new();
