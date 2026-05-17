@@ -9,7 +9,7 @@ RitsuLib mod analyzer for Slay the Spire 2 mods.
 Install the analyzer package in your mod project:
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.5.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.6.0" PrivateAssets="all" />
 ```
 
 The package collects common files automatically through `buildTransitive`. If automatic collection is disabled, expose localization JSON files as analyzer additional files:
@@ -48,6 +48,8 @@ Languages are discovered from `localization/<language>` directories; an empty la
 - Ancient dialogue keys
 - `*LocKey` / `*Key` named parameters on ModSettings attributes
 - `WithSharedTooltip` / `WithTooltip` dynamic var tooltips
+
+`RITSU001` only tracks recognized RitsuLib API calls; same-named ordinary methods such as `ModelDb.Power<T>()` or local helpers do not create localization diagnostics.
 
 `RITSU001` computes severity per key: missing `eng` keys are warnings when any non-`eng` language already has the key, otherwise errors; missing non-`eng` keys are errors when `eng` is also missing the key, and warnings when `eng` already has it. Mixed errors and warnings in the same JSON are reported as separate diagnostics.
 

@@ -9,7 +9,7 @@
 在 mod 项目中引用 analyzer 包：
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.5.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.6.0" PrivateAssets="all" />
 ```
 
 包会通过 `buildTransitive` 自动收集常见文件。如果你关闭了自动收集，也可以手动把本地化 JSON 暴露给 analyzer：
@@ -48,6 +48,8 @@ localization/zhs.json
 - Ancient 对话键
 - ModSettings 属性中的 `*LocKey` / `*Key` 参数
 - `WithSharedTooltip` / `WithTooltip` 动态变量提示
+
+`RITSU001` 只会跟踪已识别的 RitsuLib API 调用；同名普通方法（例如 `ModelDb.Power<T>()` 或项目内自定义 helper）不会触发本地化诊断。
 
 `RITSU001` 按 key 单独判断严重级别：`eng` 缺失但任一非 `eng` 语言已存在该 key 时为 Warning，否则为 Error；非 `eng` 语言缺失且 `eng` 也缺失为 Error，`eng` 已存在时为 Warning。同一 JSON 内混合 Error / Warning 时会拆成多条诊断。
 
