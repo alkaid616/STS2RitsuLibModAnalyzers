@@ -435,6 +435,29 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             AttributeSyntax attribute,
             SyntaxNodeAnalysisContext context)
         {
+            if (attributeName == "RegisterEpochAttribute")
+            {
+                var epochTypeDeclaration = attribute.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+                var typeSymbol = epochTypeDeclaration == null
+                    ? null
+                    : context.SemanticModel.GetDeclaredSymbol(epochTypeDeclaration, context.CancellationToken) as INamedTypeSymbol;
+                AddEpochRequirement(context, typeSymbol, attribute.GetLocation());
+                return;
+            }
+
+            if (attributeName == "RegisterStoryEpochAttribute")
+            {
+                var epochTypeDeclaration = attribute.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+                var typeSymbol = epochTypeDeclaration == null
+                    ? null
+                    : context.SemanticModel.GetDeclaredSymbol(epochTypeDeclaration, context.CancellationToken) as INamedTypeSymbol;
+                AddEpochRequirement(context, typeSymbol, attribute.GetLocation());
+                return;
+            }
+
+            if (attributeName == "RegisterStoryAttribute")
+                return;
+
             if (!TryGetAttributeContentInfo(attributeName, out var info))
                 return;
 
@@ -528,6 +551,47 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             string methodName,
             SyntaxNodeAnalysisContext context)
         {
+            if (methodName is "RegisterStory" or "Story" &&
+                (IsRitsuLibTimelineRegistrationInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken) ||
+                 IsRitsuLibContentRegistrationInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken)))
+            {
+                return;
+            }
+
+            if (methodName == "RegisterStoryEpoch")
+            {
+                if (!IsRitsuLibTimelineRegistrationInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken))
+                    return;
+
+                var typeSymbol = ResolveModelTypeSymbol(invocation, method, ContentRegistrationInfo.Epoch(modelTypeArgumentIndex: 1), context.SemanticModel, context.CancellationToken);
+                AddEpochRequirement(context, typeSymbol, invocation.GetLocation());
+                return;
+            }
+
+            if (methodName == "StoryEpoch")
+            {
+                if (!IsRitsuLibContentRegistrationInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken))
+                    return;
+
+                var typeSymbol = ResolveModelTypeSymbol(invocation, method, ContentRegistrationInfo.Epoch(modelTypeArgumentIndex: 1), context.SemanticModel, context.CancellationToken);
+                AddEpochRequirement(context, typeSymbol, invocation.GetLocation());
+                return;
+            }
+
+            if (methodName is "RegisterEpoch" or "Epoch")
+            {
+                if (!IsRitsuLibTimelineRegistrationInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken) &&
+                    !IsRitsuLibContentRegistrationInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken) &&
+                    !IsRitsuLibTimelineColumnEpochInvocation(invocation, method, methodName, context.SemanticModel, context.CancellationToken))
+                {
+                    return;
+                }
+
+                var typeSymbol = ResolveModelTypeSymbol(invocation, method, ContentRegistrationInfo.Epoch(), context.SemanticModel, context.CancellationToken);
+                AddEpochRequirement(context, typeSymbol, invocation.GetLocation());
+                return;
+            }
+
             if (!TryGetInvocationContentInfo(methodName, out var info))
                 return;
 
@@ -692,6 +756,28 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 AddCharacter(model);
             else if (info.CategoryStem == "ANCIENT")
                 AddAncient(model);
+        }
+
+        private void AddEpochRequirement(
+            SyntaxNodeAnalysisContext context,
+            INamedTypeSymbol? epochType,
+            Location location)
+        {
+            var epochId = ResolveConstantStringProperty(epochType, "Id", context.Compilation, context.CancellationToken);
+            if (string.IsNullOrWhiteSpace(epochId))
+                return;
+
+            var id = epochId!.Trim();
+            AddRequirement(context, LocalizationRequirement.Table(
+                "epoch",
+                id,
+                location,
+                "epochs",
+                ImmutableArray.Create(
+                    $"{id}.title",
+                    $"{id}.description",
+                    $"{id}.unlockInfo",
+                    $"{id}.unlockText")));
         }
 
         private void ReportMissingLocalization(SyntaxNodeAnalysisContext context, LocalizationRequirement? requirement)
@@ -916,8 +1002,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 "RegisterActAncientAttribute" => ContentRegistrationInfo.Ancient(),
                 "RegisterActEventAttribute" => ContentRegistrationInfo.Event(),
                 "RegisterActEncounterAttribute" => ContentRegistrationInfo.Encounter(),
-                "RegisterEpochAttribute" => ContentRegistrationInfo.Epoch(),
-                "RegisterStoryAttribute" => ContentRegistrationInfo.Story(),
                 _ => default,
             };
             return info.DisplayName != null;
@@ -944,8 +1028,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 "RegisterActEvent" or "ActEvent" => ContentRegistrationInfo.Event(modelTypeArgumentIndex: 1),
                 "RegisterSharedAncient" or "SharedAncient" => ContentRegistrationInfo.Ancient(),
                 "RegisterActAncient" or "ActAncient" => ContentRegistrationInfo.Ancient(modelTypeArgumentIndex: 1),
-                "RegisterEpoch" or "Epoch" => ContentRegistrationInfo.Epoch(),
-                "RegisterStory" or "Story" => ContentRegistrationInfo.Story(),
                 _ => default,
             };
             return info.DisplayName != null;
@@ -980,6 +1062,50 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 return method.Name.StartsWith("Register", StringComparison.Ordinal);
 
             return IsNamedType(containingType, "STS2RitsuLib.Scaffolding.Content.ModContentPackBuilder");
+        }
+
+        private static bool IsRitsuLibTimelineRegistrationInvocation(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol? method,
+            string methodName,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (method != null)
+                return IsRitsuLibTimelineRegistrationMethod(method);
+
+            return methodName.StartsWith("Register", StringComparison.Ordinal) &&
+                   IsObviousRitsuLibTimelineRegistryReceiver(
+                       GetInvocationReceiver(invocation),
+                       semanticModel,
+                       cancellationToken);
+        }
+
+        private static bool IsRitsuLibTimelineRegistrationMethod(IMethodSymbol method)
+        {
+            return IsNamedType(method.ContainingType, "STS2RitsuLib.Timeline.ModTimelineRegistry") &&
+                   method.Name.StartsWith("Register", StringComparison.Ordinal);
+        }
+
+        private static bool IsRitsuLibTimelineColumnEpochInvocation(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol? method,
+            string methodName,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (methodName != "Epoch")
+                return false;
+
+            if (method != null)
+                return IsNamedTypeDefinition(method.ContainingType, "STS2RitsuLib.Scaffolding.Content.TimelineColumnBuilder`1");
+
+            var receiver = GetInvocationReceiver(invocation);
+            if (receiver == null)
+                return false;
+
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            return IsNamedTypeDefinition(receiverType, "STS2RitsuLib.Scaffolding.Content.TimelineColumnBuilder`1");
         }
 
         private static bool IsRitsuLibOwnedRegistrationMethod(
@@ -1074,6 +1200,44 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 cancellationToken,
                 allowContentPackBuilder: false,
                 allowContentRegistry: true);
+        }
+
+        private static bool IsObviousRitsuLibTimelineRegistryReceiver(
+            ExpressionSyntax? receiver,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (receiver == null)
+                return false;
+
+            receiver = Unwrap(receiver);
+            var receiverType = semanticModel.GetTypeInfo(receiver, cancellationToken).Type as INamedTypeSymbol;
+            if (IsNamedType(receiverType, "STS2RitsuLib.Timeline.ModTimelineRegistry"))
+                return true;
+
+            if (receiver is not InvocationExpressionSyntax invocation)
+                return false;
+
+            var invokedMethod = semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol as IMethodSymbol;
+            if (invokedMethod != null)
+            {
+                if (invokedMethod.Name == "GetTimelineRegistry" &&
+                    IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.RitsuLibFramework"))
+                {
+                    return true;
+                }
+
+                if (invokedMethod.Name == "For" &&
+                    IsNamedType(invokedMethod.ContainingType, "STS2RitsuLib.Timeline.ModTimelineRegistry"))
+                {
+                    return true;
+                }
+            }
+
+            var invokedName = GetInvokedMemberName(invocation);
+            var receiverName = GetInvocationReceiver(invocation)?.ToString();
+            return (invokedName == "GetTimelineRegistry" && receiverName == "RitsuLibFramework") ||
+                   (invokedName == "For" && receiverName is "ModTimelineRegistry" or "STS2RitsuLib.Timeline.ModTimelineRegistry");
         }
 
         private static bool IsObviousRitsuLibKeywordRegistryReceiver(
@@ -1280,6 +1444,22 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             return string.Equals(type?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat), metadataName, StringComparison.Ordinal);
         }
 
+        private static bool IsNamedTypeDefinition(INamedTypeSymbol? type, string metadataName)
+        {
+            var original = type?.OriginalDefinition;
+            if (original == null)
+                return false;
+
+            if (string.Equals(original.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat), metadataName, StringComparison.Ordinal))
+                return true;
+
+            var lastDot = metadataName.LastIndexOf('.');
+            var namespaceName = lastDot < 0 ? string.Empty : metadataName.Substring(0, lastDot);
+            var typeName = lastDot < 0 ? metadataName : metadataName.Substring(lastDot + 1);
+            return string.Equals(original.MetadataName, typeName, StringComparison.Ordinal) &&
+                   string.Equals(original.ContainingNamespace?.ToDisplayString(), namespaceName, StringComparison.Ordinal);
+        }
+
         private static bool IsRegisterModAssembly(string methodName, IMethodSymbol? method)
         {
             return methodName == "RegisterModAssembly" &&
@@ -1352,9 +1532,46 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             SemanticModel semanticModel,
             System.Threading.CancellationToken cancellationToken)
         {
-            if (method is { TypeArguments.Length: > 0 } && info.ModelTypeArgumentIndex < method.TypeArguments.Length)
-                return method.TypeArguments[info.ModelTypeArgumentIndex].Name;
+            var typeSymbol = ResolveModelTypeSymbol(invocation, method, info, semanticModel, cancellationToken);
+            if (typeSymbol != null)
+                return typeSymbol.Name;
 
+            var typeArgument = ResolveModelTypeSyntax(invocation, info);
+            if (typeArgument != null)
+                return typeArgument.ToString().Split('.').Last();
+
+            var argument = FindInvocationArgument(invocation, method, info.ModelTypeParameterName, info.ModelTypeArgumentIndex);
+            if (argument?.Expression is TypeOfExpressionSyntax typeOf)
+                return typeOf.Type.ToString().Split('.').Last();
+
+            return null;
+        }
+
+        private static INamedTypeSymbol? ResolveModelTypeSymbol(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol? method,
+            ContentRegistrationInfo info,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            if (method is { TypeArguments.Length: > 0 } && info.ModelTypeArgumentIndex < method.TypeArguments.Length)
+                return method.TypeArguments[info.ModelTypeArgumentIndex] as INamedTypeSymbol;
+
+            var typeArgument = ResolveModelTypeSyntax(invocation, info);
+            if (typeArgument != null)
+                return semanticModel.GetTypeInfo(typeArgument, cancellationToken).Type as INamedTypeSymbol;
+
+            var argument = FindInvocationArgument(invocation, method, info.ModelTypeParameterName, info.ModelTypeArgumentIndex);
+            if (argument?.Expression is TypeOfExpressionSyntax typeOf)
+                return semanticModel.GetTypeInfo(typeOf.Type, cancellationToken).Type as INamedTypeSymbol;
+
+            return null;
+        }
+
+        private static TypeSyntax? ResolveModelTypeSyntax(
+            InvocationExpressionSyntax invocation,
+            ContentRegistrationInfo info)
+        {
             var typeArgumentList = invocation.Expression switch
             {
                 MemberAccessExpressionSyntax { Name: GenericNameSyntax genericName } => genericName.TypeArgumentList,
@@ -1362,16 +1579,102 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 _ => null,
             };
             if (typeArgumentList != null && info.ModelTypeArgumentIndex < typeArgumentList.Arguments.Count)
-                return typeArgumentList.Arguments[info.ModelTypeArgumentIndex].ToString().Split('.').Last();
+                return typeArgumentList.Arguments[info.ModelTypeArgumentIndex];
 
-            var argument = FindInvocationArgument(invocation, method, info.ModelTypeParameterName, info.ModelTypeArgumentIndex);
-            if (argument?.Expression is TypeOfExpressionSyntax typeOf)
+            return null;
+        }
+
+        private static string? ResolveConstantStringProperty(
+            INamedTypeSymbol? type,
+            string propertyName,
+            Compilation compilation,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            for (var current = type; current != null; current = current.BaseType)
             {
-                var type = semanticModel.GetTypeInfo(typeOf.Type, cancellationToken).Type;
-                return type?.Name ?? typeOf.Type.ToString().Split('.').Last();
+                foreach (var member in current.GetMembers(propertyName).OfType<IPropertySymbol>())
+                {
+                    if (member.IsStatic || member.Type.SpecialType != SpecialType.System_String)
+                        continue;
+
+                    foreach (var syntaxReference in member.DeclaringSyntaxReferences)
+                    {
+                        var syntax = syntaxReference.GetSyntax(cancellationToken);
+                        if (syntax is not PropertyDeclarationSyntax property)
+                            continue;
+
+                        var expression = property.ExpressionBody?.Expression ?? property.Initializer?.Value;
+                        if (expression == null)
+                            continue;
+
+                        var semanticModel = compilation.GetSemanticModel(expression.SyntaxTree);
+                        if (TryResolveConstantStringExpression(expression, semanticModel, cancellationToken, out var value))
+                            return value;
+                    }
+                }
             }
 
             return null;
+        }
+
+        private static bool TryResolveConstantStringExpression(
+            ExpressionSyntax expression,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken,
+            out string? value)
+        {
+            expression = Unwrap(expression);
+            var constant = semanticModel.GetConstantValue(expression, cancellationToken);
+            if (constant.HasValue && constant.Value is string text)
+            {
+                value = text;
+                return true;
+            }
+
+            if (expression is InterpolatedStringExpressionSyntax interpolated)
+                return TryResolveConstantInterpolatedString(interpolated, semanticModel, cancellationToken, out value);
+
+            value = null;
+            return false;
+        }
+
+        private static bool TryResolveConstantInterpolatedString(
+            InterpolatedStringExpressionSyntax interpolated,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken,
+            out string? value)
+        {
+            StringBuilder builder = new();
+            foreach (var content in interpolated.Contents)
+            {
+                switch (content)
+                {
+                    case InterpolatedStringTextSyntax text:
+                        builder.Append(text.TextToken.ValueText);
+                        break;
+                    case InterpolationSyntax interpolation:
+                        if (interpolation.AlignmentClause != null || interpolation.FormatClause != null)
+                        {
+                            value = null;
+                            return false;
+                        }
+
+                        if (!TryResolveConstantStringExpression(interpolation.Expression, semanticModel, cancellationToken, out var part))
+                        {
+                            value = null;
+                            return false;
+                        }
+
+                        builder.Append(part);
+                        break;
+                    default:
+                        value = null;
+                        return false;
+                }
+            }
+
+            value = builder.ToString();
+            return true;
         }
 
         private static string? ResolveAttributeOwnerModId(
@@ -1917,7 +2220,11 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 "pronounObject",
                 "possessiveAdjective",
                 "pronounPossessive",
-                "pronounSubject"));
+                "pronounSubject",
+                "cardsModifierTitle",
+                "cardsModifierDescription",
+                "eventDeathPrevention",
+                "unlockText"));
         }
 
         public static ContentRegistrationInfo Act()
@@ -1932,12 +2239,12 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
         public static ContentRegistrationInfo Power()
         {
-            return new("power model", "POWER", "powerType", 0, CreateTemplates("powers", "title", "description", "smartDescription"));
+            return new("power model", "POWER", "powerType", 0, CreateTemplates("powers", "title", "description"));
         }
 
         public static ContentRegistrationInfo Orb()
         {
-            return new("orb model", "ORB", "orbType", 0, CreateTemplates("orbs", "title", "description", "smartDescription"));
+            return new("orb model", "ORB", "orbType", 0, CreateTemplates("orbs", "title", "description"));
         }
 
         public static ContentRegistrationInfo Enchantment()
@@ -1952,7 +2259,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
         public static ContentRegistrationInfo Achievement()
         {
-            return new("achievement model", "ACHIEVEMENT", "achievementType", 0, CreateTemplates("achievements", "title", "description"));
+            return new("achievement model", "ACHIEVEMENT", "achievementType", 0, ImmutableArray<LocalizationTemplate>.Empty);
         }
 
         public static ContentRegistrationInfo Event(int modelTypeArgumentIndex = 0)
@@ -1965,22 +2272,21 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
         public static ContentRegistrationInfo Encounter(int modelTypeArgumentIndex = 0)
         {
-            return new("encounter model", "ENCOUNTER", "encounterType", modelTypeArgumentIndex, CreateTemplates("encounters", "title"));
+            return new("encounter model", "ENCOUNTER", "encounterType", modelTypeArgumentIndex, CreateTemplates("encounters", "title", "loss"));
         }
 
-        public static ContentRegistrationInfo Epoch()
+        public static ContentRegistrationInfo Epoch(int modelTypeArgumentIndex = 0)
         {
-            return new("epoch model", "EPOCH", "epochType", 0, CreateTemplates("epochs", "title", "description"));
-        }
-
-        public static ContentRegistrationInfo Story()
-        {
-            return new("story model", "STORY", "storyType", 0, CreateTemplates("stories", "title", "description"));
+            return new("epoch model", "EPOCH", "epochType", modelTypeArgumentIndex, ImmutableArray<LocalizationTemplate>.Empty);
         }
 
         public static ContentRegistrationInfo Ancient(int modelTypeArgumentIndex = 0)
         {
-            return new("ancient model", "ANCIENT", "ancientType", modelTypeArgumentIndex, CreateTemplates("ancients", "title", "epithet"));
+            return new("ancient model", "ANCIENT", "ancientType", modelTypeArgumentIndex, CreateTemplates(
+                "ancients",
+                "title",
+                "epithet",
+                "pages.INITIAL.description"));
         }
 
         private static ImmutableArray<LocalizationTemplate> CreateTemplates(string table, params string[] suffixes)
@@ -2162,7 +2468,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
         private static void SkipWhiteSpace(string json, ref int index)
         {
-            while (index < json.Length && char.IsWhiteSpace(json[index]))
+            while (index < json.Length && (char.IsWhiteSpace(json[index]) || json[index] == '\uFEFF'))
                 index++;
         }
     }

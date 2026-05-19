@@ -235,6 +235,12 @@ public sealed partial class RitsuLibModAnalyzerTests
             d.GetMessage().Contains("MANOSABA_LIN_CARD_MY_STRIKE.description"));
         Assert.Contains(diagnostics, d =>
             d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.title"));
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.description"));
+        Assert.DoesNotContain(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
             d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.smartDescription"));
     }
 
@@ -253,7 +259,34 @@ public sealed partial class RitsuLibModAnalyzerTests
 
         Assert.Contains(diagnostics, d =>
             d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.title"));
+        Assert.Contains(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.description"));
+        Assert.DoesNotContain(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
             d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.smartDescription"));
+    }
+
+    [Fact]
+    public async Task ReportsOnlyRequiredOrbLocStringKeys()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class MyOrb { }
+
+                public static void RegisterContent()
+                {
+                    RitsuLibFramework.GetContentRegistry(MainFile.ModId)
+                        .RegisterOrb<MyOrb>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\orbs.json", "{}"));
+
+        var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        Assert.Contains("MANOSABA_LIN_ORB_MY_ORB.title", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_ORB_MY_ORB.description", missing.GetMessage());
+        Assert.DoesNotContain("MANOSABA_LIN_ORB_MY_ORB.smartDescription", missing.GetMessage());
     }
 
     [Fact]
@@ -289,7 +322,7 @@ public sealed partial class RitsuLibModAnalyzerTests
         var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
         Assert.Contains("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.title", missing.GetMessage());
         Assert.Contains("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.description", missing.GetMessage());
-        Assert.Contains("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.smartDescription", missing.GetMessage());
+        Assert.DoesNotContain("MANOSABA_LIN_POWER_TEMP_STRENGTH_POWER.smartDescription", missing.GetMessage());
         Assert.DoesNotContain("MANOSABA_LIN_POWER_STRENGTH_POWER", missing.GetMessage());
     }
 
@@ -450,6 +483,122 @@ public sealed partial class RitsuLibModAnalyzerTests
     }
 
     [Fact]
+    public async Task ReportsRegisteredAncientInheritedEventLocStringKeys()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [RegisterSharedAncient]
+                public sealed class Architect { }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\ancients.json", "{}"));
+
+        var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        Assert.Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.title", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.epithet", missing.GetMessage());
+        Assert.Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.pages.INITIAL.description", missing.GetMessage());
+    }
+
+    [Fact]
+    public async Task ReportsEpochLocStringKeysFromStaticId()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [RegisterEpoch]
+                public sealed class CrystalEpoch : EpochModel
+                {
+                    public override string Id => "CRYSTAL_GATE";
+                }
+
+                [RegisterStoryEpoch(typeof(MyStory))]
+                public sealed class AttributeStoryEpoch : EpochModel
+                {
+                    public override string Id => "ATTRIBUTE_STORY_GATE";
+                }
+
+                public static void RegisterTimeline()
+                {
+                    RitsuLibFramework.GetTimelineRegistry(MainFile.ModId)
+                        .RegisterEpoch<SecondEpoch>();
+
+                    RitsuLibFramework.CreateContentPack(MainFile.ModId)
+                        .Epoch<PackEpoch>();
+
+                    ModTimelineRegistry.For(MainFile.ModId)
+                        .RegisterStoryEpoch<MyStory, StoryEpochModel>();
+                }
+
+                public sealed class SecondEpoch : EpochModel
+                {
+                    private const string Prefix = "SECOND";
+                    public override string Id => Prefix + "_GATE";
+                }
+
+                public sealed class PackEpoch : EpochModel
+                {
+                    public override string Id => $"PACK_{"GATE"}";
+                }
+
+                public sealed class StoryEpochModel : EpochModel
+                {
+                    public override string Id { get; } = "STORY_GATE";
+                }
+
+                public sealed class MyStory : StoryModel
+                {
+                    protected override string Id => "story";
+                    public override EpochModel[] Epochs => Array.Empty<EpochModel>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\epochs.json", "{}"));
+
+        var messages = diagnostics
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .Select(d => d.GetMessage())
+            .ToArray();
+
+        Assert.Contains(messages, message => message.Contains("CRYSTAL_GATE.title") && message.Contains("CRYSTAL_GATE.unlockText"));
+        Assert.Contains(messages, message => message.Contains("SECOND_GATE.description") && message.Contains("SECOND_GATE.unlockInfo"));
+        Assert.Contains(messages, message => message.Contains("PACK_GATE.title"));
+        Assert.Contains(messages, message => message.Contains("STORY_GATE.unlockText"));
+        Assert.Contains(messages, message => message.Contains("ATTRIBUTE_STORY_GATE.description"));
+        Assert.DoesNotContain(messages, message => message.Contains("MANOSABA_LIN_EPOCH_"));
+    }
+
+    [Fact]
+    public async Task DoesNotGuessEpochOrStoryLocalizationKeys()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [RegisterEpoch]
+                public sealed class DynamicEpoch : EpochModel
+                {
+                    public override string Id => DateTime.UtcNow.ToString();
+                }
+
+                [RegisterStory]
+                public sealed class MyStory : StoryModel
+                {
+                    protected override string Id => "story";
+                    public override EpochModel[] Epochs => Array.Empty<EpochModel>();
+                }
+
+                public static void RegisterTimeline()
+                {
+                    RitsuLibFramework.CreateContentPack(MainFile.ModId)
+                        .Story<MyStory>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\epochs.json", "{}"),
+            AdditionalJson(@"C:\mod\localization\eng\stories.json", "{}"));
+
+        Assert.DoesNotContain(diagnostics, d =>
+            d.Id == AnalyzerUnderTest.MissingLocalizationId &&
+            (d.GetMessage().Contains("MANOSABA_LIN_EPOCH_DYNAMIC_EPOCH") ||
+             d.GetMessage().Contains("MANOSABA_LIN_STORY_MY_STORY") ||
+             d.GetMessage().Contains("stories.json")));
+    }
+
+    [Fact]
     public async Task DoesNotReportSameNamedNonRitsuLibLocalizationHelpers()
     {
         var diagnostics = await AnalyzeAsync(
@@ -547,6 +696,82 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains("\"EXISTING\": \"ok\"", text);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", text);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", text);
+        AssertValidJson(text);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixPreservesNestedJsonAndStringBraces()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", """
+            {
+              "EXISTING": {
+                "text": "value with } brace",
+                "items": [1, { "inner": "}" }]
+              }
+            }
+            """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/card_keywords.json");
+        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+
+        Assert.Contains("\"text\": \"value with } brace\"", text);
+        Assert.Contains("\"inner\": \"}\"", text);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", text);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", text);
+        AssertValidJson(text);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixHandlesBomCrlfAndTrailingWhitespace()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "\uFEFF{\r\n  \"EXISTING\": \"ok\"\r\n}\r\n   "));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/card_keywords.json");
+        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+
+        Assert.StartsWith("\uFEFF", text, StringComparison.Ordinal);
+        Assert.Contains("\r\n", text);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", text);
+        AssertValidJson(text);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixReusesTopLevelTrailingComma()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", """
+            {
+              "EXISTING": "ok",
+            }
+            """));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/card_keywords.json");
+        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+
+        Assert.DoesNotContain(",,", text);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", text);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", text);
+        AssertValidJson(text);
     }
 
     [Fact]
@@ -589,6 +814,27 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.StartsWith("{", text.TrimStart(), StringComparison.Ordinal);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", text);
         Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.description\": \"\"", text);
+        AssertValidJson(text);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixReplacesBomOnlyJsonWithObject()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "\uFEFF   "));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/card_keywords.json");
+        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\card_keywords.json");
+
+        Assert.StartsWith("\uFEFF{", text, StringComparison.Ordinal);
+        Assert.Contains("\"MANOSABA_LIN_KEYWORD_HIRO.title\": \"\"", text);
+        AssertValidJson(text);
     }
 
     [Fact]
@@ -1027,5 +1273,10 @@ public sealed partial class RitsuLibModAnalyzerTests
         var fixAllAction = await fixAllProvider.GetFixAsync(fixAllContext);
         Assert.NotNull(fixAllAction);
         Assert.Equal("Fix all missing localization issues", fixAllAction.Title);
+    }
+
+    private static void AssertValidJson(string text)
+    {
+        using var _ = JsonDocument.Parse(text.TrimStart('\uFEFF'));
     }
 }

@@ -900,8 +900,11 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         if (string.IsNullOrWhiteSpace(text))
             return true;
 
-        var trimmed = text.Trim();
-        return trimmed.StartsWith("{", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal);
+        var bomPrefix = GetBomPrefix(text);
+        if (bomPrefix.Length > 0 && string.IsNullOrWhiteSpace(text.Substring(bomPrefix.Length)))
+            return true;
+
+        return TryReadTopLevelObject(text, out _);
     }
 
     private static string AddEntriesToJsonObject(
@@ -911,22 +914,23 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         if (entries.Length == 0)
             return existingText;
 
-        if (string.IsNullOrWhiteSpace(existingText) || existingText.Trim() == "{}")
-            return BuildNewJsonObject(entries);
+        var newLine = DetectNewLine(existingText);
+        var bomPrefix = GetBomPrefix(existingText);
+        var textWithoutBom = bomPrefix.Length == 0 ? existingText : existingText.Substring(bomPrefix.Length);
+        if (string.IsNullOrWhiteSpace(textWithoutBom))
+            return bomPrefix + BuildNewJsonObject(entries, newLine);
 
-        var closingBrace = existingText.LastIndexOf('}');
-        if (closingBrace < 0)
+        if (!TryReadTopLevelObject(existingText, out var objectInfo))
             return existingText;
 
-        var before = existingText.Substring(0, closingBrace).TrimEnd();
-        var after = existingText.Substring(closingBrace);
-        var hasExistingEntries = before.Trim() != "{";
+        var before = existingText.Substring(0, objectInfo.ClosingBraceIndex).TrimEnd();
+        var after = existingText.Substring(objectInfo.ClosingBraceIndex);
         StringBuilder builder = new();
         builder.Append(before);
-        if (hasExistingEntries)
+        if (objectInfo.HasEntries && !objectInfo.HasTrailingComma)
             builder.Append(',');
 
-        builder.AppendLine();
+        builder.Append(newLine);
         for (var i = 0; i < entries.Length; i++)
         {
             var comma = i == entries.Length - 1 ? string.Empty : ",";
@@ -935,20 +939,26 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 .Append("\": \"")
                 .Append(EscapeJson(entries[i].Value))
                 .Append('"')
-                .AppendLine(comma);
+                .Append(comma)
+                .Append(newLine);
         }
 
         builder.Append(after.TrimStart());
-        if (!builder.ToString().EndsWith("\n", StringComparison.Ordinal))
-            builder.AppendLine();
+        if (!EndsWithNewLine(builder))
+            builder.Append(newLine);
 
         return builder.ToString();
     }
 
     private static string BuildNewJsonObject(ImmutableArray<KeyValuePair<string, string>> entries)
     {
+        return BuildNewJsonObject(entries, Environment.NewLine);
+    }
+
+    private static string BuildNewJsonObject(ImmutableArray<KeyValuePair<string, string>> entries, string newLine)
+    {
         StringBuilder builder = new();
-        builder.AppendLine("{");
+        builder.Append('{').Append(newLine);
         for (var i = 0; i < entries.Length; i++)
         {
             var comma = i == entries.Length - 1 ? string.Empty : ",";
@@ -957,11 +967,372 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 .Append("\": \"")
                 .Append(EscapeJson(entries[i].Value))
                 .Append('"')
-                .AppendLine(comma);
+                .Append(comma)
+                .Append(newLine);
         }
 
-        builder.AppendLine("}");
+        builder.Append('}').Append(newLine);
         return builder.ToString();
+    }
+
+    private static string DetectNewLine(string text)
+    {
+        return text.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n";
+    }
+
+    private static string GetBomPrefix(string text)
+    {
+        return text.Length > 0 && text[0] == '\uFEFF' ? "\uFEFF" : string.Empty;
+    }
+
+    private static bool EndsWithNewLine(StringBuilder builder)
+    {
+        return builder.Length > 0 && builder[builder.Length - 1] is '\n' or '\r';
+    }
+
+    private static bool TryReadTopLevelObject(string text, out TopLevelObjectInfo objectInfo)
+    {
+        objectInfo = default;
+        var index = 0;
+        SkipWhiteSpaceAndBom(text, ref index);
+        if (index >= text.Length || text[index] != '{')
+            return false;
+
+        var openBraceIndex = index;
+        index++;
+        var hasEntries = false;
+        var hasTrailingComma = false;
+
+        SkipWhiteSpace(text, ref index);
+        if (index < text.Length && text[index] == '}')
+            return TryFinishTopLevelObject(text, index, hasEntries, hasTrailingComma, out objectInfo);
+
+        while (index < text.Length)
+        {
+            SkipWhiteSpace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == '}')
+            {
+                if (!hasEntries)
+                    return false;
+
+                return TryFinishTopLevelObject(text, index, hasEntries, hasTrailingComma, out objectInfo);
+            }
+
+            if (!TrySkipJsonString(text, ref index))
+                return false;
+
+            SkipWhiteSpace(text, ref index);
+            if (index >= text.Length || text[index] != ':')
+                return false;
+
+            index++;
+            if (!TrySkipJsonValue(text, ref index, allowTrailingComma: false))
+                return false;
+
+            hasEntries = true;
+            SkipWhiteSpace(text, ref index);
+
+            if (index < text.Length && text[index] == ',')
+            {
+                index++;
+                hasTrailingComma = true;
+                continue;
+            }
+
+            hasTrailingComma = false;
+            if (index >= text.Length || text[index] != '}')
+                return false;
+        }
+
+        return false;
+
+        bool TryFinishTopLevelObject(
+            string source,
+            int closingBraceIndex,
+            bool entries,
+            bool trailingComma,
+            out TopLevelObjectInfo info)
+        {
+            var trailingIndex = closingBraceIndex + 1;
+            SkipWhiteSpace(source, ref trailingIndex);
+            if (trailingIndex != source.Length)
+            {
+                info = default;
+                return false;
+            }
+
+            info = new(openBraceIndex, closingBraceIndex, entries, trailingComma);
+            return true;
+        }
+    }
+
+    private static bool TrySkipJsonValue(string text, ref int index, bool allowTrailingComma)
+    {
+        SkipWhiteSpace(text, ref index);
+        if (index >= text.Length)
+            return false;
+
+        return text[index] switch
+        {
+            '"' => TrySkipJsonString(text, ref index),
+            '{' => TrySkipJsonObject(text, ref index, allowTrailingComma),
+            '[' => TrySkipJsonArray(text, ref index, allowTrailingComma),
+            't' => TrySkipKeyword(text, ref index, "true"),
+            'f' => TrySkipKeyword(text, ref index, "false"),
+            'n' => TrySkipKeyword(text, ref index, "null"),
+            '-' or >= '0' and <= '9' => TrySkipJsonNumber(text, ref index),
+            _ => false,
+        };
+    }
+
+    private static bool TrySkipJsonObject(string text, ref int index, bool allowTrailingComma)
+    {
+        if (index >= text.Length || text[index] != '{')
+            return false;
+
+        index++;
+        var hasEntries = false;
+        var justReadComma = false;
+
+        while (index < text.Length)
+        {
+            SkipWhiteSpace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == '}')
+            {
+                if (justReadComma && (!allowTrailingComma || !hasEntries))
+                    return false;
+
+                index++;
+                return true;
+            }
+
+            if (!TrySkipJsonString(text, ref index))
+                return false;
+
+            SkipWhiteSpace(text, ref index);
+            if (index >= text.Length || text[index] != ':')
+                return false;
+
+            index++;
+            if (!TrySkipJsonValue(text, ref index, allowTrailingComma: false))
+                return false;
+
+            hasEntries = true;
+            justReadComma = false;
+            SkipWhiteSpace(text, ref index);
+
+            if (index < text.Length && text[index] == ',')
+            {
+                index++;
+                justReadComma = true;
+                continue;
+            }
+
+            if (index >= text.Length || text[index] != '}')
+                return false;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipJsonArray(string text, ref int index, bool allowTrailingComma)
+    {
+        if (index >= text.Length || text[index] != '[')
+            return false;
+
+        index++;
+        var hasEntries = false;
+        var justReadComma = false;
+
+        while (index < text.Length)
+        {
+            SkipWhiteSpace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == ']')
+            {
+                if (justReadComma && (!allowTrailingComma || !hasEntries))
+                    return false;
+
+                index++;
+                return true;
+            }
+
+            if (!TrySkipJsonValue(text, ref index, allowTrailingComma: false))
+                return false;
+
+            hasEntries = true;
+            justReadComma = false;
+            SkipWhiteSpace(text, ref index);
+
+            if (index < text.Length && text[index] == ',')
+            {
+                index++;
+                justReadComma = true;
+                continue;
+            }
+
+            if (index >= text.Length || text[index] != ']')
+                return false;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipJsonString(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '"')
+            return false;
+
+        index++;
+        while (index < text.Length)
+        {
+            var ch = text[index++];
+            if (ch == '"')
+                return true;
+
+            if (ch < ' ')
+                return false;
+
+            if (ch != '\\')
+                continue;
+
+            if (index >= text.Length)
+                return false;
+
+            var escaped = text[index++];
+            if (escaped is '"' or '\\' or '/' or 'b' or 'f' or 'n' or 'r' or 't')
+                continue;
+
+            if (escaped != 'u' || index + 4 > text.Length)
+                return false;
+
+            for (var i = 0; i < 4; i++)
+            {
+                if (!IsHexDigit(text[index + i]))
+                    return false;
+            }
+
+            index += 4;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipKeyword(string text, ref int index, string keyword)
+    {
+        if (index + keyword.Length > text.Length ||
+            !string.Equals(text.Substring(index, keyword.Length), keyword, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var next = index + keyword.Length;
+        if (next < text.Length && !IsJsonDelimiter(text[next]))
+            return false;
+
+        index = next;
+        return true;
+    }
+
+    private static bool TrySkipJsonNumber(string text, ref int index)
+    {
+        var start = index;
+        if (text[index] == '-')
+            index++;
+
+        if (index >= text.Length)
+            return false;
+
+        if (text[index] == '0')
+        {
+            index++;
+        }
+        else if (text[index] is >= '1' and <= '9')
+        {
+            do
+            {
+                index++;
+            } while (index < text.Length && text[index] is >= '0' and <= '9');
+        }
+        else
+        {
+            return false;
+        }
+
+        if (index < text.Length && text[index] == '.')
+        {
+            index++;
+            var digitStart = index;
+            while (index < text.Length && text[index] is >= '0' and <= '9')
+                index++;
+
+            if (index == digitStart)
+                return false;
+        }
+
+        if (index < text.Length && text[index] is 'e' or 'E')
+        {
+            index++;
+            if (index < text.Length && text[index] is '+' or '-')
+                index++;
+
+            var digitStart = index;
+            while (index < text.Length && text[index] is >= '0' and <= '9')
+                index++;
+
+            if (index == digitStart)
+                return false;
+        }
+
+        return index > start && (index >= text.Length || IsJsonDelimiter(text[index]));
+    }
+
+    private static bool IsJsonDelimiter(char ch)
+    {
+        return char.IsWhiteSpace(ch) || ch is ',' or '}' or ']';
+    }
+
+    private static bool IsHexDigit(char ch)
+    {
+        return ch is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+    }
+
+    private static void SkipWhiteSpaceAndBom(string text, ref int index)
+    {
+        if (index < text.Length && text[index] == '\uFEFF')
+            index++;
+
+        SkipWhiteSpace(text, ref index);
+    }
+
+    private static void SkipWhiteSpace(string text, ref int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+    }
+
+    private readonly struct TopLevelObjectInfo
+    {
+        public TopLevelObjectInfo(int openBraceIndex, int closingBraceIndex, bool hasEntries, bool hasTrailingComma)
+        {
+            OpenBraceIndex = openBraceIndex;
+            ClosingBraceIndex = closingBraceIndex;
+            HasEntries = hasEntries;
+            HasTrailingComma = hasTrailingComma;
+        }
+
+        public int OpenBraceIndex { get; }
+        public int ClosingBraceIndex { get; }
+        public bool HasEntries { get; }
+        public bool HasTrailingComma { get; }
     }
 
     private static string EscapeJson(string value)

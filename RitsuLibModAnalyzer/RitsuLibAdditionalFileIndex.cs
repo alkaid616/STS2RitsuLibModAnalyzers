@@ -631,7 +631,7 @@ internal sealed class RitsuLibAdditionalFileIndex
 
         private static void SkipWhiteSpace(string json, ref int index)
         {
-            while (index < json.Length && char.IsWhiteSpace(json[index]))
+            while (index < json.Length && (char.IsWhiteSpace(json[index]) || json[index] == '\uFEFF'))
                 index++;
         }
 

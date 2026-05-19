@@ -32,6 +32,7 @@ public sealed partial class RitsuLibModAnalyzerTests
             using MegaCrit.Sts2.Core.Localization.DynamicVars;
             using MegaCrit.Sts2.Core.Models;
             using MegaCrit.Sts2.Core.Models.Powers;
+            using MegaCrit.Sts2.Core.Timeline;
             using STS2RitsuLib;
             using STS2RitsuLib.Audio;
             using STS2RitsuLib.CardPiles;
@@ -50,6 +51,7 @@ public sealed partial class RitsuLibModAnalyzerTests
             using STS2RitsuLib.RuntimeInput;
             using STS2RitsuLib.Scaffolding.Content;
             using STS2RitsuLib.Settings;
+            using STS2RitsuLib.Timeline;
             using STS2RitsuLib.TopBar;
             using STS2RitsuLib.Utils;
 
@@ -79,6 +81,7 @@ public sealed partial class RitsuLibModAnalyzerTests
                     public static I18N CreateModLocalization(string modId, string instanceName) => new();
                     public static ModKeywordRegistry GetKeywordRegistry(string modId) => new();
                     public static ModContentRegistry GetContentRegistry(string modId) => new();
+                    public static ModTimelineRegistry GetTimelineRegistry(string modId) => new();
                     public static void EnsureGodotScriptsRegistered(Assembly assembly) { }
                     public static ModSettingsPageBuilder RegisterModSettings(string modId, string title, string? pageId = null) => new();
                     public static void RegisterHealthBarForecast(string modId, string sourceId) { }
@@ -142,8 +145,15 @@ public sealed partial class RitsuLibModAnalyzerTests
                 }
 
                 public sealed class RegisterPowerAttribute : ContentRegistrationAttribute { }
+                public sealed class RegisterOrbAttribute : ContentRegistrationAttribute { }
                 public sealed class RegisterCharacterAttribute : ContentRegistrationAttribute { }
                 public sealed class RegisterSharedAncientAttribute : ContentRegistrationAttribute { }
+                public sealed class RegisterEpochAttribute : AutoRegistrationAttribute { }
+                public sealed class RegisterStoryAttribute : AutoRegistrationAttribute { }
+                public sealed class RegisterStoryEpochAttribute : AutoRegistrationAttribute
+                {
+                    public RegisterStoryEpochAttribute(Type storyType) { }
+                }
 
                 public sealed class RitsuLibOwnedByAttribute : Attribute
                 {
@@ -158,6 +168,7 @@ public sealed partial class RitsuLibModAnalyzerTests
                     public static ModContentRegistry For(string modId) => new();
                     public void RegisterCard<TPool, TCard>() { }
                     public void RegisterPower<TPower>() { }
+                    public void RegisterOrb<TOrb>() { }
                 }
 
                 public readonly struct ModelPublicEntryOptions
@@ -175,8 +186,12 @@ public sealed partial class RitsuLibModAnalyzerTests
                     public ModContentPackBuilder Card<TPool, TCard>() => this;
                     public ModContentPackBuilder Card<TPool, TCard>(ModelPublicEntryOptions publicEntry) => this;
                     public ModContentPackBuilder Power<TPower>() => this;
+                    public ModContentPackBuilder Orb<TOrb>() => this;
                     public ModContentPackBuilder Character<TCharacter>() => this;
                     public ModContentPackBuilder SharedAncient<TAncient>() => this;
+                    public ModContentPackBuilder Epoch<TEpoch>() => this;
+                    public ModContentPackBuilder Story<TStory>() => this;
+                    public ModContentPackBuilder StoryEpoch<TStory, TEpoch>() => this;
                     public ModContentPackBuilder CardKeywordOwnedByLocNamespace(string localKeywordStem, string? iconPath = null) => this;
                     public ModContentPackBuilder KeywordOwned(string localKeywordStem, string titleTable = "card_keywords", string? titleKey = null, string? descriptionTable = null, string? descriptionKey = null) => this;
                     public void Apply() { }
@@ -187,6 +202,7 @@ public sealed partial class RitsuLibModAnalyzerTests
             {
                 public abstract class AbstractModel { }
                 public abstract class PowerModel : AbstractModel { }
+                public abstract class OrbModel : AbstractModel { }
 
                 public static class ModelDb
                 {
@@ -197,6 +213,34 @@ public sealed partial class RitsuLibModAnalyzerTests
             namespace MegaCrit.Sts2.Core.Models.Powers
             {
                 public sealed class StrengthPower : PowerModel { }
+            }
+
+            namespace MegaCrit.Sts2.Core.Timeline
+            {
+                public abstract class EpochModel
+                {
+                    public abstract string Id { get; }
+                }
+
+                public abstract class StoryModel
+                {
+                    protected abstract string Id { get; }
+                    public abstract EpochModel[] Epochs { get; }
+                }
+            }
+
+            namespace STS2RitsuLib.Timeline
+            {
+                public sealed class ModTimelineRegistry
+                {
+                    public static ModTimelineRegistry For(string modId) => new();
+                    public void RegisterEpoch<TEpoch>() where TEpoch : EpochModel => throw new NotImplementedException();
+                    public void RegisterEpoch(Type epochType) { }
+                    public void RegisterStory<TStory>() where TStory : StoryModel => throw new NotImplementedException();
+                    public void RegisterStory(Type storyType) { }
+                    public void RegisterStoryEpoch<TStory, TEpoch>() where TStory : StoryModel where TEpoch : EpochModel => throw new NotImplementedException();
+                    public void RegisterStoryEpoch(Type storyType, Type epochType) { }
+                }
             }
 
             namespace MegaCrit.Sts2.Core.Localization.DynamicVars
