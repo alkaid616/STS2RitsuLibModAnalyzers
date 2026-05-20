@@ -17,7 +17,7 @@
         <IsPackable>true</IsPackable>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <PackageId>Nothing.STS2RitsuLib.ModAnalyzers</PackageId>
-        <PackageVersion>0.6.0</PackageVersion>
+        <PackageVersion>0.7.0</PackageVersion>
         <Authors>Nothing</Authors>
         <Description>Roslyn analyzers for Slay the Spire 2 mods built with RitsuLib.</Description>
         <PackageTags>c#;roslyn;analyzer;slay-the-spire-2;ritsulib;modding</PackageTags>

@@ -9,7 +9,7 @@ RitsuLib mod analyzer for Slay the Spire 2 mods.
 Install the analyzer package in your mod project:
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.6.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.7.0" PrivateAssets="all" />
 ```
 
 The package collects common files automatically through `buildTransitive`. If automatic collection is disabled, expose localization JSON files as analyzer additional files:
