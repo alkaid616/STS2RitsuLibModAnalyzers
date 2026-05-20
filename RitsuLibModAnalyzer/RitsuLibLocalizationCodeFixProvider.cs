@@ -912,16 +912,18 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         if (root == null)
             return document;
 
-        var token = root.FindToken(Math.Min(diagnosticSpan.Start, Math.Max(0, root.FullSpan.End - 1)));
-        var node = token.Parent;
-        while (node != null && node.Parent != null && node.Kind() is not SyntaxKind.ClassDeclaration and not SyntaxKind.MethodDeclaration and not SyntaxKind.InvocationExpression and not SyntaxKind.Attribute)
-            node = node.Parent;
+        var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
+        var source = sourceText.ToString();
+        if (ContainsEquivalentLocalizationSnippet(source, requests))
+            return document;
 
-        node ??= root;
-        var comment = SyntaxFactory.Comment(BuildSnippetComment(requests));
-        var newNode = node.WithLeadingTrivia(node.GetLeadingTrivia().Add(comment).Add(SyntaxFactory.ElasticCarriageReturnLineFeed));
-        var newRoot = root.ReplaceNode(node, newNode);
-        return document.WithSyntaxRoot(newRoot);
+        var target = FindSnippetInsertionTarget(root, diagnosticSpan);
+        var insertionPosition = GetLineStartPosition(sourceText, target);
+        var newLine = DetectNewLine(source);
+        var indent = GetLineIndent(sourceText, target.SpanStart);
+        var snippet = IndentMultiline(BuildSnippetComment(requests, newLine), indent, newLine);
+        var changedText = sourceText.WithChanges(new TextChange(new TextSpan(insertionPosition, 0), snippet));
+        return document.WithText(changedText);
     }
 
     private static async Task<Document> InsertSnippetForRelatedDiagnosticsAsync(
@@ -959,15 +961,20 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
 
     private static string BuildSnippetComment(ImmutableArray<LocalizationFixRequest> requests)
     {
+        return BuildSnippetComment(requests, Environment.NewLine);
+    }
+
+    private static string BuildSnippetComment(ImmutableArray<LocalizationFixRequest> requests, string newLine)
+    {
         StringBuilder builder = new();
-        builder.AppendLine("/*");
-        builder.AppendLine(RitsuLibUiText.MissingLocalizationSnippetHeader);
+        builder.Append("/*").Append(newLine);
+        builder.Append(RitsuLibUiText.MissingLocalizationSnippetHeader).Append(newLine);
 
         foreach (var group in requests.GroupBy(request => request.TargetPath, StringComparer.OrdinalIgnoreCase)
                      .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
         {
-            builder.AppendLine(group.Key);
-            builder.AppendLine("{");
+            builder.Append(group.Key).Append(newLine);
+            builder.Append('{').Append(newLine);
 
             var entries = group
                 .SelectMany(request => request.Entries)
@@ -984,14 +991,104 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                     .Append("\": \"")
                     .Append(EscapeJson(entries[i].Value))
                     .Append('"')
-                    .AppendLine(comma);
+                    .Append(comma)
+                    .Append(newLine);
             }
 
-            builder.AppendLine("}");
+            builder.Append('}').Append(newLine);
         }
 
-        builder.AppendLine("*/");
+        builder.Append("*/").Append(newLine);
         return builder.ToString();
+    }
+
+    private static SyntaxNode FindSnippetInsertionTarget(SyntaxNode root, TextSpan diagnosticSpan)
+    {
+        var position = Math.Min(diagnosticSpan.Start, Math.Max(0, root.FullSpan.End - 1));
+        var token = root.FindToken(position);
+        var node = token.Parent;
+        if (node == null)
+            return root;
+
+        var attributeList = node.AncestorsAndSelf().OfType<AttributeListSyntax>().FirstOrDefault();
+        if (attributeList != null)
+        {
+            var parentMember = attributeList.Parent as MemberDeclarationSyntax;
+            return parentMember ?? (SyntaxNode)attributeList;
+        }
+
+        var statement = node.AncestorsAndSelf().OfType<StatementSyntax>().FirstOrDefault();
+        if (statement != null)
+            return statement;
+
+        var member = node.AncestorsAndSelf().OfType<MemberDeclarationSyntax>().FirstOrDefault();
+        if (member != null)
+            return member;
+
+        return node.AncestorsAndSelf().LastOrDefault(candidate => candidate.Parent == root) ?? root;
+    }
+
+    private static int GetLineStartPosition(SourceText sourceText, SyntaxNode target)
+    {
+        if (sourceText.Length == 0)
+            return 0;
+
+        var position = Math.Max(0, Math.Min(target.FullSpan.Start, sourceText.Length - 1));
+        return sourceText.Lines.GetLineFromPosition(position).Start;
+    }
+
+    private static string GetLineIndent(SourceText sourceText, int position)
+    {
+        if (sourceText.Length == 0)
+            return string.Empty;
+
+        var line = sourceText.Lines.GetLineFromPosition(Math.Max(0, Math.Min(position, sourceText.Length - 1))).ToString();
+        var index = 0;
+        while (index < line.Length && line[index] is ' ' or '\t')
+            index++;
+
+        return line.Substring(0, index);
+    }
+
+    private static string IndentMultiline(string text, string indent, string newLine)
+    {
+        if (indent.Length == 0 || text.Length == 0)
+            return text;
+
+        var lines = text.Split(new[] { newLine }, StringSplitOptions.None);
+        StringBuilder builder = new();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (i == lines.Length - 1 && lines[i].Length == 0)
+                break;
+
+            builder.Append(indent).Append(lines[i]).Append(newLine);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool ContainsEquivalentLocalizationSnippet(
+        string source,
+        ImmutableArray<LocalizationFixRequest> requests)
+    {
+        if (source.IndexOf("Missing RitsuLib localization:", StringComparison.OrdinalIgnoreCase) < 0 &&
+            source.IndexOf("缺失的 RitsuLib 本地化:", StringComparison.OrdinalIgnoreCase) < 0)
+            return false;
+
+        foreach (var group in requests.GroupBy(request => request.TargetPath, StringComparer.OrdinalIgnoreCase))
+        {
+            if (source.IndexOf(group.Key, StringComparison.OrdinalIgnoreCase) < 0)
+                return false;
+
+            foreach (var key in group.SelectMany(request => request.Entries.Select(entry => entry.Key)).Distinct(StringComparer.Ordinal))
+            {
+                if (source.IndexOf(key, StringComparison.Ordinal) < 0)
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     private static TextDocument? FindAdditionalDocument(Project project, string targetPath)

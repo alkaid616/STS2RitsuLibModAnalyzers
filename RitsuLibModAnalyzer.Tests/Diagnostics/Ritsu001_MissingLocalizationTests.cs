@@ -859,6 +859,57 @@ public sealed partial class RitsuLibModAnalyzerTests
     }
 
     [Fact]
+    public async Task SnippetCodeFixInsertsBeforeAttributedMemberWithoutBreakingSyntax()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "{}"));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Insert localization");
+        var text = await GetDocumentTextAsync(changed);
+
+        Assert.Contains("*/" + Environment.NewLine + "        [RegisterOwnedCardKeyword(\"hiro\")]", text);
+        Assert.DoesNotContain("[/*", text);
+        Assert.DoesNotContain("*/RegisterOwnedCardKeyword", text);
+
+        var changedDocument = Assert.Single(changed.Projects.Single().Documents);
+        var root = await changedDocument.GetSyntaxRootAsync();
+        Assert.NotNull(root);
+        Assert.Empty(root!.GetDiagnostics());
+    }
+
+    [Fact]
+    public async Task SnippetCodeFixKeepsDiagnosticAndDoesNotInsertDuplicateSnippet()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterOwnedCardKeyword("hiro")]
+                private sealed class KeywordMarker { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\card_keywords.json", "{}"));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Insert localization");
+        var changedProject = changed.Projects.Single();
+        var diagnosticsAfterSnippet = (await AnalyzeProjectAsync(changedProject))
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .ToArray();
+
+        var diagnosticAfterSnippet = Assert.Single(diagnosticsAfterSnippet);
+        var changedAgain = await ApplyCodeFixAsync(changedProject, diagnosticAfterSnippet, "Insert localization");
+        var text = await GetDocumentTextAsync(changedAgain);
+
+        Assert.Equal(1, CountOccurrences(text, "Missing RitsuLib localization:"));
+        Assert.Equal(1, CountOccurrences(text, "\"MANOSABA_LIN_KEYWORD_HIRO.title\""));
+    }
+
+    [Fact]
     public async Task CodeFixTitlesUseChineseCulture()
     {
         using var culture = UseCulture("zh-CN");
