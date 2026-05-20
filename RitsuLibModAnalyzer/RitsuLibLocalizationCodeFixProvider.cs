@@ -805,8 +805,6 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             var updatedContent = AddEntriesToJsonObject(existingText, entries);
             var updatedText = SourceText.From(updatedContent, Encoding.UTF8);
 
-            WriteLocalizationFile(targetPath, project, updatedContent);
-
             if (document != null)
             {
                 solution = solution.WithAdditionalDocumentText(document.Id, updatedText);
@@ -1011,22 +1009,6 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         catch
         {
             return null;
-        }
-    }
-
-    private static void WriteLocalizationFile(string targetPath, Project project, string content)
-    {
-        try
-        {
-            var fullPath = ResolveFullPath(targetPath, project);
-            var directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                Directory.CreateDirectory(directory);
-
-            File.WriteAllText(fullPath, content, new UTF8Encoding(false));
-        }
-        catch
-        {
         }
     }
 
