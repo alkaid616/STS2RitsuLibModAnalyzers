@@ -9,10 +9,9 @@ namespace Nothing.STS2RitsuLib.ModAnalyzers;
 
 internal static class RitsuLibSyntaxFacts
 {
-    private static readonly Regex NonAlphaNumericRegex = new("[^A-Za-z0-9]+", RegexOptions.Compiled);
-    private static readonly Regex AcronymBoundaryRegex = new("([A-Z]+)([A-Z][a-z])", RegexOptions.Compiled);
-    private static readonly Regex CamelBoundaryRegex = new("([a-z0-9])([A-Z])", RegexOptions.Compiled);
-    private static readonly Regex RepeatedUnderscoreRegex = new("_+", RegexOptions.Compiled);
+    private static readonly Regex CamelCaseRegex = new("([A-Za-z0-9]|\\G(?!^))([A-Z])", RegexOptions.Compiled);
+    private static readonly Regex WhitespaceRegex = new("\\s+", RegexOptions.Compiled);
+    private static readonly Regex SpecialCharRegex = new("[^A-Z0-9_]", RegexOptions.Compiled);
     private static readonly Regex RecommendedIdRegex = new("^[a-z0-9][a-z0-9._-]*$", RegexOptions.Compiled);
 
     public static string GetCompoundId(string modId, string typeStem, string localStem)
@@ -22,11 +21,9 @@ internal static class RitsuLibSyntaxFacts
 
     public static string NormalizePublicStem(string value)
     {
-        var normalized = NonAlphaNumericRegex.Replace(value.Trim(), "_");
-        normalized = AcronymBoundaryRegex.Replace(normalized, "$1_$2");
-        normalized = CamelBoundaryRegex.Replace(normalized, "$1_$2");
-        normalized = RepeatedUnderscoreRegex.Replace(normalized, "_");
-        return normalized.Trim('_').ToUpperInvariant();
+        var text = CamelCaseRegex.Replace(value.Trim(), "$1_$2");
+        var input = WhitespaceRegex.Replace(text.ToUpperInvariant(), "_");
+        return SpecialCharRegex.Replace(input, string.Empty);
     }
 
     public static string NormalizeFullPublicEntry(string value)

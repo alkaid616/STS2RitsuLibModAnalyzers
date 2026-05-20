@@ -244,6 +244,50 @@ public sealed partial class RitsuLibModAnalyzerTests
             d.GetMessage().Contains("MANOSABA_LIN_POWER_MY_POWER.smartDescription"));
     }
 
+    [Theory]
+    [InlineData("HTTPServer2Card", "H_TT_P_SERVER2_CARD")]
+    [InlineData("XML2Reader", "X_M_L2_READER")]
+    [InlineData("XMLReader", "X_ML_READER")]
+    [InlineData("My Strike", "MY_STRIKE")]
+    [InlineData("AttrFullCard", "ATTR_FULL_CARD")]
+    [InlineData("my-mod", "MYMOD")]
+    [InlineData("Manosaba.Lin", "MANOSABALIN")]
+    public void NormalizePublicStemMatchesGameSlugify(string value, string expected)
+    {
+        Assert.Equal(expected, RitsuLibSyntaxFacts.NormalizePublicStem(value));
+    }
+
+    [Fact]
+    public async Task ReportsContentModelKeysWithGameAccurateAcronymNormalization()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public sealed class CardPool { }
+                public sealed class HTTPServer2Card { }
+                public sealed class XML2Reader { }
+                public sealed class XMLReader { }
+
+                public static void RegisterContent()
+                {
+                    RitsuLibFramework.CreateContentPack(MainFile.ModId)
+                        .Card<CardPool, HTTPServer2Card>()
+                        .Card<CardPool, XML2Reader>()
+                        .Card<CardPool, XMLReader>();
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\cards.json", "{}"));
+
+        var message = string.Join("\n", diagnostics
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
+            .Select(d => d.GetMessage()));
+
+        Assert.Contains("MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD.title", message);
+        Assert.Contains("MANOSABA_LIN_CARD_X_M_L2_READER.description", message);
+        Assert.Contains("MANOSABA_LIN_CARD_X_ML_READER.title", message);
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_HTTP_SERVER2_CARD", message);
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_XML_READER", message);
+    }
+
     [Fact]
     public async Task ReportsContentModelKeysForRegistryPowerRegistration()
     {
@@ -994,6 +1038,28 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
         Assert.DoesNotContain("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
         Assert.DoesNotContain("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixAddsGameAccurateAcronymCardKeys()
+    {
+        using var culture = UseCulture("en-US");
+        var project = CreateProject(
+            Source("""
+                [RegisterCard(typeof(CardPool))]
+                public sealed class HTTPServer2Card { }
+                """),
+            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"));
+
+        var diagnostic = Assert.Single((await AnalyzeProjectAsync(project))
+            .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/cards.json");
+        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
+
+        Assert.Contains("\"MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD.title\": \"\"", text);
+        Assert.Contains("\"MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD.description\": \"\"", text);
+        Assert.DoesNotContain("HTTP_SERVER2_CARD", text);
     }
 
     [Fact]

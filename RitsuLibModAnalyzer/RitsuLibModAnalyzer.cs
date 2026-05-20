@@ -4,7 +4,6 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -18,11 +17,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
     public const string MissingLocalizationId = RitsuLibDiagnostics.MissingLocalizationId;
 
     private const string I18NTable = "__ritsulib_i18n__";
-
-    private static readonly Regex NonAlphaNumericRegex = new("[^A-Za-z0-9]+", RegexOptions.Compiled);
-    private static readonly Regex AcronymBoundaryRegex = new("([A-Z]+)([A-Z][a-z])", RegexOptions.Compiled);
-    private static readonly Regex CamelBoundaryRegex = new("([a-z0-9])([A-Z])", RegexOptions.Compiled);
-    private static readonly Regex RepeatedUnderscoreRegex = new("_+", RegexOptions.Compiled);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         RitsuLibDiagnostics.CreateSupported();
@@ -308,7 +302,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
     private static string GetCompoundId(string modId, string typeStem, string localStem)
     {
-        return $"{NormalizePublicStem(modId)}_{typeStem.Trim().ToUpperInvariant()}_{NormalizePublicStem(localStem)}";
+        return RitsuLibSyntaxFacts.GetCompoundId(modId, typeStem, localStem);
     }
 
     private static string GetModelEntry(string modId, string categoryStem, string typeName, PublicEntryOverride publicEntryOverride)
@@ -325,16 +319,12 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
     private static string NormalizePublicStem(string value)
     {
-        var normalized = NonAlphaNumericRegex.Replace(value.Trim(), "_");
-        normalized = AcronymBoundaryRegex.Replace(normalized, "$1_$2");
-        normalized = CamelBoundaryRegex.Replace(normalized, "$1_$2");
-        normalized = RepeatedUnderscoreRegex.Replace(normalized, "_");
-        return normalized.Trim('_').ToUpperInvariant();
+        return RitsuLibSyntaxFacts.NormalizePublicStem(value);
     }
 
     private static string NormalizeFullPublicEntry(string value)
     {
-        return NormalizePublicStem(value);
+        return RitsuLibSyntaxFacts.NormalizeFullPublicEntry(value);
     }
 
     private static string NormalizeLanguageCode(string? language)
