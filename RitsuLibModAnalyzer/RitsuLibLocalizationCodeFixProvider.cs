@@ -24,59 +24,84 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
     public sealed override ImmutableArray<string> FixableDiagnosticIds { get; } =
         RitsuLibDiagnostics.FixableIds;
 
-    public sealed override FixAllProvider GetFixAllProvider()
+    public sealed override FixAllProvider? GetFixAllProvider()
     {
-        return new RitsuLibLocalizationFixAllProvider();
+        return null;
     }
 
     public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
-        var requests = context.Diagnostics
+        var registrations = context.Diagnostics
             .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
-            .Select(ReadRequest)
-            .Where(request => request != null)
-            .Cast<LocalizationFixRequest>()
+            .SelectMany(diagnostic => ReadRequests(diagnostic)
+                .Select(request => new LocalizationFixRegistration(diagnostic, request)))
+            .ToImmutableArray();
+
+        registrations = await ExpandMissingLocalizationRegistrationsAsync(
+            context.Document.Project,
+            registrations,
+            context.CancellationToken).ConfigureAwait(false);
+
+        var requests = registrations
+            .Select(registration => registration.Request!)
             .ToImmutableArray();
 
         if (requests.Length > 0)
         {
-            context.RegisterCodeFix(
-                CodeAction.Create(
-                    RitsuLibUiText.AddMissingKeysToTargetTitle(GetTargetLabel(requests)),
-                    cancellationToken => AddMissingKeysAsync(context.Document.Project.Solution, context.Document.Project.Id, requests, cancellationToken),
-                    "AddMissingRitsuLibLocalizationKeys"),
-                context.Diagnostics);
-
-            var tableLabel = GetTableLabel(requests);
-            if (!string.IsNullOrEmpty(tableLabel))
+            foreach (var group in registrations
+                         .GroupBy(registration => registration.Request!.TargetPath, StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(group => GetTargetLabel(group.First().Request!), StringComparer.OrdinalIgnoreCase))
             {
+                var targetRequests = group
+                    .Select(registration => registration.Request!)
+                    .ToImmutableArray();
+                var targetDiagnostics = group
+                    .Select(registration => registration.Diagnostic)
+                    .ToImmutableArray();
+                var targetPath = group.Key;
+
                 context.RegisterCodeFix(
-                    CodeAction.Create(
-                        RitsuLibUiText.AddMissingKeysToAllLanguagesTitle(tableLabel),
-                        cancellationToken => AddMissingKeysToAllLanguagesForCurrentDiagnosticsAsync(
-                            context.Document.Project,
-                            requests,
-                            cancellationToken),
-                        "AddMissingRitsuLibLocalizationKeysToAllLanguages"),
-                    context.Diagnostics);
+                    new LocalizationJsonCodeAction(
+                        RitsuLibUiText.AddMissingKeysToTargetTitle(GetTargetLabel(targetRequests)),
+                        "AddMissingRitsuLibLocalizationKeys:" + targetPath,
+                        cancellationToken => AddMissingKeysAsync(
+                            context.Document.Project.Solution,
+                            context.Document.Project.Id,
+                            targetRequests,
+                            cancellationToken)),
+                    targetDiagnostics);
             }
 
-            context.RegisterCodeFix(
-                CodeAction.Create(
-                    RitsuLibUiText.FixAllMissingLocalizationTitle,
-                    cancellationToken => AddMissingKeysForProjectAsync(context.Document.Project, requests, cancellationToken),
-                    "FixAllMissingRitsuLibLocalizationKeysInProject"),
-                context.Diagnostics);
+            var primaryRegistrations = registrations
+                .Where(registration => IsPrimaryFixSource(registration.Diagnostic))
+                .ToImmutableArray();
+            if (primaryRegistrations.Length > 0)
+            {
+                context.RegisterCodeFix(
+                    new LocalizationJsonCodeAction(
+                        RitsuLibUiText.FixAllMissingLocalizationTitle,
+                        "FixAllMissingRitsuLibLocalizationKeysInProject",
+                        cancellationToken => AddMissingKeysForProjectAsync(context.Document.Project, requests, cancellationToken),
+                        isInlinable: false),
+                    primaryRegistrations.Select(registration => registration.Diagnostic).ToImmutableArray());
+            }
         }
 
-        if (requests.Length > 0)
+        var snippetRegistrations = registrations
+            .Where(registration => IsPrimaryFixSource(registration.Diagnostic))
+            .ToImmutableArray();
+        if (snippetRegistrations.Length > 0)
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
                     RitsuLibUiText.InsertSnippetTitle,
-                    cancellationToken => InsertSnippetAsync(context.Document, requests, GetSourceSpan(context.Diagnostics[0]), cancellationToken),
+                    cancellationToken => InsertSnippetForRelatedDiagnosticsAsync(
+                        context.Document,
+                        snippetRegistrations[0].Diagnostic,
+                        requests,
+                        cancellationToken),
                     "InsertMissingRitsuLibLocalizationSnippet"),
-                context.Diagnostics.Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId).ToImmutableArray());
+                snippetRegistrations.Select(registration => registration.Diagnostic).ToImmutableArray());
         }
 
         foreach (var diagnostic in context.Diagnostics.Where(diagnostic => diagnostic.Id != RitsuLibDiagnostics.MissingLocalizationId))
@@ -131,6 +156,46 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
                 cancellationToken => InsertTodoCommentAsync(context.Document, diagnostic, null, cancellationToken),
                 "InsertRitsuLibTodoSnippet"),
             diagnostic);
+    }
+
+    private static bool IsPrimaryFixSource(Diagnostic diagnostic)
+    {
+        return !diagnostic.Properties.TryGetValue(RitsuLibDiagnosticProperties.PrimaryFixSource, out var value) ||
+               string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<ImmutableArray<LocalizationFixRegistration>> ExpandMissingLocalizationRegistrationsAsync(
+        Project project,
+        ImmutableArray<LocalizationFixRegistration> registrations,
+        CancellationToken cancellationToken)
+    {
+        if (registrations.Length == 0)
+            return registrations;
+
+        var primaryRegistration = registrations.FirstOrDefault(registration => IsPrimaryFixSource(registration.Diagnostic));
+        if (primaryRegistration == null)
+            return ImmutableArray<LocalizationFixRegistration>.Empty;
+
+        var diagnostics = await CollectProjectDiagnosticsAsync(project, cancellationToken).ConfigureAwait(false);
+        var expanded = diagnostics
+            .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
+            .Where(diagnostic => IsSameSourceLocation(diagnostic, primaryRegistration.Diagnostic))
+            .SelectMany(diagnostic => ReadRequests(diagnostic)
+                .Select(request => new LocalizationFixRegistration(diagnostic, request)))
+            .GroupBy(registration => GetRegistrationKey(registration), StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToImmutableArray();
+
+        return expanded.Length == 0 ? registrations : expanded;
+    }
+
+    private static string GetRegistrationKey(LocalizationFixRegistration registration)
+    {
+        var request = registration.Request;
+        return request == null
+            ? string.Empty
+            : request.TargetPath + "\u001f" +
+              string.Join(RitsuLibDiagnosticProperties.ListSeparator, request.Entries.Select(entry => entry.Key));
     }
 
     private static async Task<Document> AddResourcePathPrefixAsync(
@@ -627,6 +692,68 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             keys.Zip(values, (key, value) => new KeyValuePair<string, string>(key, value)).ToImmutableArray());
     }
 
+    private static ImmutableArray<LocalizationFixRequest> ReadRequests(Diagnostic diagnostic)
+    {
+        var properties = diagnostic.Properties;
+        if (!properties.TryGetValue(RitsuLibDiagnosticProperties.TargetPaths, out var targetPathsText) ||
+            string.IsNullOrWhiteSpace(targetPathsText))
+        {
+            var request = ReadRequest(diagnostic);
+            return request == null ? ImmutableArray<LocalizationFixRequest>.Empty : ImmutableArray.Create(request);
+        }
+
+        var targetPaths = SplitRecords(targetPathsText);
+        var languages = SplitRecords(GetProperty(properties, RitsuLibDiagnosticProperties.Languages));
+        var tables = SplitRecords(GetProperty(properties, RitsuLibDiagnosticProperties.Tables));
+        var isI18NValues = SplitRecords(GetProperty(properties, RitsuLibDiagnosticProperties.IsI18NValues));
+        var keyGroups = SplitRecords(GetProperty(properties, RitsuLibDiagnosticProperties.KeyGroups));
+        var valueGroups = SplitRecords(GetProperty(properties, RitsuLibDiagnosticProperties.ValueGroups));
+
+        var builder = ImmutableArray.CreateBuilder<LocalizationFixRequest>();
+        for (var i = 0; i < targetPaths.Length; i++)
+        {
+            var targetPath = targetPaths[i];
+            if (string.IsNullOrWhiteSpace(targetPath))
+                continue;
+
+            var keys = SplitList(GetAt(keyGroups, i));
+            if (keys.Length == 0)
+                continue;
+
+            var values = SplitList(GetAt(valueGroups, i));
+            if (values.Length < keys.Length)
+                values = values.Concat(Enumerable.Repeat(string.Empty, keys.Length - values.Length)).ToArray();
+
+            builder.Add(new LocalizationFixRequest(
+                targetPath,
+                GetAt(languages, i),
+                GetAt(tables, i),
+                string.Equals(GetAt(isI18NValues, i), "true", StringComparison.OrdinalIgnoreCase),
+                keys.Zip(values, (key, value) => new KeyValuePair<string, string>(key, value)).ToImmutableArray()));
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static string? GetProperty(
+        ImmutableDictionary<string, string?> properties,
+        string key)
+    {
+        return properties.TryGetValue(key, out var value) ? value : null;
+    }
+
+    private static string GetAt(string[] values, int index)
+    {
+        return index >= 0 && index < values.Length ? values[index] : string.Empty;
+    }
+
+    private static string[] SplitRecords(string? value)
+    {
+        return value == null || value.Length == 0
+            ? Array.Empty<string>()
+            : value.Split(new[] { RitsuLibDiagnosticProperties.RecordSeparator }, StringSplitOptions.None);
+    }
+
     private static string[] SplitList(string? value)
     {
         return value == null || value.Length == 0
@@ -634,7 +761,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             : value.Split(new[] { RitsuLibDiagnosticProperties.ListSeparator }, StringSplitOptions.None);
     }
 
-    private static async Task<Solution> AddMissingKeysForProjectAsync(
+    private static async Task<LocalizationJsonChange> AddMissingKeysForProjectAsync(
         Project project,
         ImmutableArray<LocalizationFixRequest> fallbackRequests,
         CancellationToken cancellationToken)
@@ -647,62 +774,6 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return await AddMissingKeysAsync(project.Solution, project.Id, requests, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<Solution> AddMissingKeysToAllLanguagesForCurrentDiagnosticsAsync(
-        Project project,
-        ImmutableArray<LocalizationFixRequest> currentRequests,
-        CancellationToken cancellationToken)
-    {
-        var projectRequests = await CollectProjectRequestsAsync(project, cancellationToken).ConfigureAwait(false);
-        var requests = ExpandCurrentKeysToAllLanguages(projectRequests, currentRequests);
-        if (requests.Length == 0)
-            requests = currentRequests;
-
-        return await AddMissingKeysAsync(project.Solution, project.Id, requests, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static ImmutableArray<LocalizationFixRequest> ExpandCurrentKeysToAllLanguages(
-        ImmutableArray<LocalizationFixRequest> projectRequests,
-        ImmutableArray<LocalizationFixRequest> currentRequests)
-    {
-        var builder = ImmutableArray.CreateBuilder<LocalizationFixRequest>();
-
-        foreach (var currentRequest in currentRequests)
-        {
-            var currentKeys = currentRequest.Entries
-                .Select(entry => entry.Key)
-                .ToImmutableHashSet(StringComparer.Ordinal);
-
-            foreach (var projectRequest in projectRequests)
-            {
-                if (!IsSameLocalizationTable(projectRequest, currentRequest))
-                    continue;
-
-                var filtered = FilterEntries(projectRequest, currentKeys);
-                if (filtered.Length == 0)
-                    continue;
-
-                builder.Add(projectRequest.WithEntries(filtered));
-            }
-        }
-
-        return builder.Distinct().ToImmutableArray();
-    }
-
-    private static bool IsSameLocalizationTable(LocalizationFixRequest left, LocalizationFixRequest right)
-    {
-        return left.IsI18N == right.IsI18N &&
-               string.Equals(left.Table, right.Table, StringComparison.Ordinal);
-    }
-
-    private static ImmutableArray<KeyValuePair<string, string>> FilterEntries(
-        LocalizationFixRequest request,
-        IImmutableSet<string> keys)
-    {
-        return request.Entries
-            .Where(entry => keys.Contains(entry.Key))
-            .ToImmutableArray();
-    }
-
     private static async Task<ImmutableArray<LocalizationFixRequest>> CollectProjectRequestsAsync(
         Project project,
         CancellationToken cancellationToken)
@@ -710,9 +781,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         var diagnostics = await CollectProjectDiagnosticsAsync(project, cancellationToken).ConfigureAwait(false);
         return diagnostics
             .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
-            .Select(ReadRequest)
-            .Where(request => request != null)
-            .Cast<LocalizationFixRequest>()
+            .SelectMany(diagnostic => ReadRequests(diagnostic).AsEnumerable())
             .Distinct()
             .ToImmutableArray();
     }
@@ -752,7 +821,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return new ProjectAnalyzerConfigOptionsProvider(projectDirectory);
     }
 
-    private static async Task<Solution> AddMissingKeysAsync(
+    private static async Task<LocalizationJsonChange> AddMissingKeysAsync(
         Solution solution,
         ProjectId projectId,
         ImmutableArray<LocalizationFixRequest> requests,
@@ -760,14 +829,17 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
     {
         var project = solution.GetProject(projectId);
         if (project == null)
-            return solution;
+            return LocalizationJsonChange.Empty(solution);
+
+        var fileWrites = ImmutableArray.CreateBuilder<LocalizationFileWrite>();
 
         foreach (var group in requests.GroupBy(request => request.TargetPath, StringComparer.OrdinalIgnoreCase))
         {
             var targetPath = group.Key;
+            var fullPath = ResolveFullPath(targetPath, project);
             var document = FindAdditionalDocument(project, targetPath);
             var existingText = document == null
-                ? ReadLocalizationFile(targetPath, project) ?? string.Empty
+                ? ReadLocalizationFile(fullPath) ?? string.Empty
                 : (await document.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString();
 
             if (!CanPatchTopLevelObject(existingText))
@@ -796,7 +868,7 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
 
                     project = solution.GetProject(projectId);
                     if (project == null)
-                        return solution;
+                        return new LocalizationJsonChange(solution, fileWrites.ToImmutable());
                 }
 
                 continue;
@@ -804,6 +876,8 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
 
             var updatedContent = AddEntriesToJsonObject(existingText, entries);
             var updatedText = SourceText.From(updatedContent, Encoding.UTF8);
+            if (ShouldWritePhysicalLocalizationFile(fullPath))
+                fileWrites.Add(new LocalizationFileWrite(fullPath, updatedContent));
 
             if (document != null)
             {
@@ -822,10 +896,10 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
 
             project = solution.GetProject(projectId);
             if (project == null)
-                return solution;
+                return new LocalizationJsonChange(solution, fileWrites.ToImmutable());
         }
 
-        return solution;
+        return new LocalizationJsonChange(solution, fileWrites.ToImmutable());
     }
 
     private static async Task<Document> InsertSnippetAsync(
@@ -848,6 +922,39 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         var newNode = node.WithLeadingTrivia(node.GetLeadingTrivia().Add(comment).Add(SyntaxFactory.ElasticCarriageReturnLineFeed));
         var newRoot = root.ReplaceNode(node, newNode);
         return document.WithSyntaxRoot(newRoot);
+    }
+
+    private static async Task<Document> InsertSnippetForRelatedDiagnosticsAsync(
+        Document document,
+        Diagnostic triggerDiagnostic,
+        ImmutableArray<LocalizationFixRequest> fallbackRequests,
+        CancellationToken cancellationToken)
+    {
+        var diagnostics = await CollectProjectDiagnosticsAsync(document.Project, cancellationToken).ConfigureAwait(false);
+        var requests = diagnostics
+            .Where(diagnostic => diagnostic.Id == RitsuLibDiagnostics.MissingLocalizationId)
+            .Where(diagnostic => IsSameSourceLocation(diagnostic, triggerDiagnostic))
+            .SelectMany(diagnostic => ReadRequests(diagnostic).AsEnumerable())
+            .ToImmutableArray();
+
+        if (requests.Length == 0)
+            requests = fallbackRequests;
+
+        return await InsertSnippetAsync(document, requests, GetSourceSpan(triggerDiagnostic), cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool IsSameSourceLocation(Diagnostic left, Diagnostic right)
+    {
+        if (left.Location.IsInSource != right.Location.IsInSource)
+            return false;
+
+        if (!left.Location.SourceSpan.Equals(right.Location.SourceSpan))
+            return false;
+
+        return string.Equals(
+            left.Location.SourceTree?.FilePath,
+            right.Location.SourceTree?.FilePath,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildSnippetComment(ImmutableArray<LocalizationFixRequest> requests)
@@ -1370,11 +1477,10 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return builder.ToString();
     }
 
-    private static string? ReadLocalizationFile(string targetPath, Project project)
+    private static string? ReadLocalizationFile(string fullPath)
     {
         try
         {
-            var fullPath = ResolveFullPath(targetPath, project);
             return File.Exists(fullPath) ? File.ReadAllText(fullPath, Encoding.UTF8) : null;
         }
         catch
@@ -1398,55 +1504,111 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return targetPath;
     }
 
-    private sealed class RitsuLibLocalizationFixAllProvider : FixAllProvider
+    private static bool ShouldWritePhysicalLocalizationFile(string fullPath)
     {
-        public override async Task<CodeAction?> GetFixAsync(FixAllContext fixAllContext)
+        return !string.IsNullOrWhiteSpace(fullPath) && Path.IsPathRooted(fullPath);
+    }
+
+    private sealed class LocalizationJsonCodeAction : CodeAction
+    {
+        private readonly string _title;
+        private readonly string _equivalenceKey;
+        private readonly Func<CancellationToken, Task<LocalizationJsonChange>> _createChangeAsync;
+        private readonly bool _isInlinable;
+
+        public LocalizationJsonCodeAction(
+            string title,
+            string equivalenceKey,
+            Func<CancellationToken, Task<LocalizationJsonChange>> createChangeAsync,
+            bool isInlinable = true)
         {
-            var allRequests = new List<LocalizationFixRequest>();
-
-            if (fixAllContext.Scope == FixAllScope.Solution)
-            {
-                foreach (var project in fixAllContext.Solution.Projects)
-                {
-                    var diagnostics = await fixAllContext.GetAllDiagnosticsAsync(project).ConfigureAwait(false);
-                    CollectRequests(diagnostics, allRequests);
-                }
-            }
-            else
-            {
-                var diagnostics = await fixAllContext.GetAllDiagnosticsAsync(fixAllContext.Project).ConfigureAwait(false);
-                CollectRequests(diagnostics, allRequests);
-            }
-
-            if (allRequests.Count == 0)
-                return null;
-
-            var requestsArray = allRequests.Distinct().ToImmutableArray();
-            var targetProject = fixAllContext.Scope == FixAllScope.Solution
-                ? fixAllContext.Solution.Projects.FirstOrDefault() ?? fixAllContext.Project
-                : fixAllContext.Project;
-
-            return CodeAction.Create(
-                RitsuLibUiText.FixAllMissingLocalizationTitle,
-                _ => AddMissingKeysAsync(
-                    targetProject.Solution, targetProject.Id, requestsArray, CancellationToken.None),
-                "FixAllRitsuLibLocalizationKeys");
+            _title = title;
+            _equivalenceKey = equivalenceKey;
+            _createChangeAsync = createChangeAsync;
+            _isInlinable = isInlinable;
         }
 
-        private static void CollectRequests(
-            ImmutableArray<Diagnostic> diagnostics,
-            List<LocalizationFixRequest> requests)
-        {
-            foreach (var diagnostic in diagnostics)
-            {
-                if (diagnostic.Id != RitsuLibDiagnostics.MissingLocalizationId)
-                    continue;
+        public override string Title => _title;
+        public override string EquivalenceKey => _equivalenceKey;
+        public override bool IsInlinable => _isInlinable;
 
-                var request = ReadRequest(diagnostic);
-                if (request != null)
-                    requests.Add(request);
+        protected override async Task<IEnumerable<CodeActionOperation>> ComputeOperationsAsync(CancellationToken cancellationToken)
+        {
+            var change = await _createChangeAsync(cancellationToken).ConfigureAwait(false);
+            var operations = ImmutableArray.CreateBuilder<CodeActionOperation>();
+            operations.Add(new ApplyChangesOperation(change.Solution));
+            if (change.FileWrites.Length > 0)
+                operations.Add(new WriteLocalizationFilesOperation(change.FileWrites));
+
+            return operations.ToImmutable();
+        }
+    }
+
+    private sealed class WriteLocalizationFilesOperation : CodeActionOperation
+    {
+        private readonly ImmutableArray<LocalizationFileWrite> _fileWrites;
+
+        public WriteLocalizationFilesOperation(ImmutableArray<LocalizationFileWrite> fileWrites)
+        {
+            _fileWrites = fileWrites;
+        }
+
+        public override string Title => RitsuLibUiText.FixAllMissingLocalizationTitle;
+
+        public override void Apply(Workspace workspace, CancellationToken cancellationToken)
+        {
+            foreach (var fileWrite in _fileWrites)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var directory = Path.GetDirectoryName(fileWrite.FullPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory!);
+
+                File.WriteAllText(fileWrite.FullPath, fileWrite.Content, Encoding.UTF8);
             }
         }
+    }
+
+    private readonly struct LocalizationJsonChange
+    {
+        public LocalizationJsonChange(Solution solution, ImmutableArray<LocalizationFileWrite> fileWrites)
+        {
+            Solution = solution;
+            FileWrites = fileWrites;
+        }
+
+        public Solution Solution { get; }
+        public ImmutableArray<LocalizationFileWrite> FileWrites { get; }
+
+        public static LocalizationJsonChange Empty(Solution solution)
+        {
+            return new(solution, ImmutableArray<LocalizationFileWrite>.Empty);
+        }
+    }
+
+    private readonly struct LocalizationFileWrite
+    {
+        public LocalizationFileWrite(string fullPath, string content)
+        {
+            FullPath = fullPath;
+            Content = content;
+        }
+
+        public string FullPath { get; }
+        public string Content { get; }
+    }
+
+    private sealed class LocalizationFixRegistration
+    {
+        public LocalizationFixRegistration(Diagnostic diagnostic, LocalizationFixRequest? request)
+        {
+            Diagnostic = diagnostic;
+            Request = request;
+        }
+
+        public Diagnostic Diagnostic { get; }
+        public LocalizationFixRequest? Request { get; }
     }
 
     private sealed class LocalizationFixRequest
@@ -1471,10 +1633,6 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         public bool IsI18N { get; }
         public ImmutableArray<KeyValuePair<string, string>> Entries { get; }
 
-        public LocalizationFixRequest WithEntries(ImmutableArray<KeyValuePair<string, string>> entries)
-        {
-            return new LocalizationFixRequest(TargetPath, Language, Table, IsI18N, entries);
-        }
     }
 
     private sealed class ResourcePathTodoInsertion
@@ -1556,7 +1714,11 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         {
             Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrWhiteSpace(projectDirectory))
+            {
                 options["build_property.MSBuildProjectDirectory"] = projectDirectory!;
+                options["build_property.ProjectDir"] = projectDirectory!;
+                options["build_property.MSBuildProjectFullPath"] = Path.Combine(projectDirectory!, "AnalyzerTests.csproj");
+            }
 
             _globalOptions = new ProjectAnalyzerConfigOptions(options);
         }
@@ -1608,18 +1770,6 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             return request.Language + "/" + GetTableFileName(request.Table, request.IsI18N);
 
         return Path.GetFileName(request.TargetPath);
-    }
-
-    private static string GetTableLabel(ImmutableArray<LocalizationFixRequest> requests)
-    {
-        var distinct = requests
-            .Select(request => string.IsNullOrWhiteSpace(request.Table)
-                ? Path.GetFileName(request.TargetPath)
-                : GetTableFileName(request.Table, request.IsI18N))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        return distinct.Length == 1 ? distinct[0] : string.Empty;
     }
 
     private static string GetTableFileName(string table, bool isI18N)

@@ -52,13 +52,6 @@ internal static class RitsuLibUiText
             : $"Add missing localization to {targetLabel}";
     }
 
-    public static string AddMissingKeysToAllLanguagesTitle(string targetLabel)
-    {
-        return IsChinese
-            ? $"添加缺失的本地化到 */{targetLabel}"
-            : $"Add missing localization to */{targetLabel}";
-    }
-
     public static string FixAllMissingLocalizationTitle =>
         IsChinese ? "修复所有本地化缺失问题" : "Fix all missing localization issues";
 

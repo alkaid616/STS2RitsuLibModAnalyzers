@@ -87,7 +87,6 @@ interpolated strings can also suggest those symbols.
 Available fixes:
 
 - `Add missing localization to <language>/<table>.json` (RITSU001) — appends only the current diagnostic's missing keys to the current target JSON; creates the file if it does not exist.
-- `Add missing localization to */<table>.json` (RITSU001) — appends the current diagnostic's keys to the same table for every language.
 - `Fix all missing localization issues` (RITSU001) — collects every RITSU001 in the current project and creates or updates every target JSON.
 - `Insert localization JSON snippet` (RITSU001) — inserts a comment-form JSON near the diagnostic location for manual copy/paste.
 - `Add res:// prefix` (RITSU013) — completes missing resource prefixes; when one project asset matches, it completes the real resource root and prefers the project's unique root symbol.

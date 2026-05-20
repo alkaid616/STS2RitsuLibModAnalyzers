@@ -148,6 +148,7 @@ public sealed partial class RitsuLibModAnalyzerTests
                 public sealed class RegisterOrbAttribute : ContentRegistrationAttribute { }
                 public sealed class RegisterCharacterAttribute : ContentRegistrationAttribute { }
                 public sealed class RegisterSharedAncientAttribute : ContentRegistrationAttribute { }
+                public sealed class RegisterGlobalEncounterAttribute : ContentRegistrationAttribute { }
                 public sealed class RegisterEpochAttribute : AutoRegistrationAttribute { }
                 public sealed class RegisterStoryAttribute : AutoRegistrationAttribute { }
                 public sealed class RegisterStoryEpochAttribute : AutoRegistrationAttribute
@@ -189,6 +190,7 @@ public sealed partial class RitsuLibModAnalyzerTests
                     public ModContentPackBuilder Orb<TOrb>() => this;
                     public ModContentPackBuilder Character<TCharacter>() => this;
                     public ModContentPackBuilder SharedAncient<TAncient>() => this;
+                    public ModContentPackBuilder GlobalEncounter<TEncounter>() => this;
                     public ModContentPackBuilder Epoch<TEpoch>() => this;
                     public ModContentPackBuilder Story<TStory>() => this;
                     public ModContentPackBuilder StoryEpoch<TStory, TEpoch>() => this;
@@ -474,6 +476,8 @@ public sealed partial class RitsuLibModAnalyzerTests
             {
                 public class CardPool { }
                 public class MyCard { }
+                public class MyAncient { }
+                public class MyEncounter { }
                 public class MyPower { }
             }
 
@@ -521,6 +525,24 @@ public sealed partial class RitsuLibModAnalyzerTests
 
     private static async Task<ImmutableArray<Diagnostic>> AnalyzeProjectAsync(Project project, string projectDirectory)
     {
+        return await AnalyzeProjectAsync(
+            project,
+            new InMemoryAnalyzerConfigOptionsProvider(projectDirectory));
+    }
+
+    private static async Task<ImmutableArray<Diagnostic>> AnalyzeProjectAsync(
+        Project project,
+        IReadOnlyDictionary<string, string> buildProperties)
+    {
+        return await AnalyzeProjectAsync(
+            project,
+            new InMemoryAnalyzerConfigOptionsProvider(buildProperties));
+    }
+
+    private static async Task<ImmutableArray<Diagnostic>> AnalyzeProjectAsync(
+        Project project,
+        AnalyzerConfigOptionsProvider analyzerConfigOptionsProvider)
+    {
         var compilation = await project.GetCompilationAsync();
         Assert.NotNull(compilation);
 
@@ -532,7 +554,7 @@ public sealed partial class RitsuLibModAnalyzerTests
         return await AnalyzeCompilationAsync(
             compilation!,
             additionalTexts,
-            new InMemoryAnalyzerConfigOptionsProvider(projectDirectory));
+            analyzerConfigOptionsProvider);
     }
 
     private static async Task<ImmutableArray<Diagnostic>> AnalyzeCompilationAsync(
@@ -543,7 +565,7 @@ public sealed partial class RitsuLibModAnalyzerTests
         var analyzer = new AnalyzerUnderTest();
         var options = new AnalyzerOptions(
             additionalTexts,
-            analyzerConfigOptionsProvider ?? new InMemoryAnalyzerConfigOptionsProvider(null));
+            analyzerConfigOptionsProvider ?? new InMemoryAnalyzerConfigOptionsProvider((string?)null));
         var compilationWithAnalyzers = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(analyzer),
             new CompilationWithAnalyzersOptions(options, onAnalyzerException: null, concurrentAnalysis: true, logAnalyzerExecutionTime: false, reportSuppressedDiagnostics: false));
@@ -612,17 +634,29 @@ public sealed partial class RitsuLibModAnalyzerTests
         var action = exactAction ?? Assert.Single(actions, action => action.Title.StartsWith(titlePrefix, StringComparison.Ordinal));
         var operations = await action.GetOperationsAsync(CancellationToken.None);
         var applyChanges = Assert.Single(operations.OfType<ApplyChangesOperation>());
+        foreach (var operation in operations.Where(operation => operation is not ApplyChangesOperation))
+            operation.Apply(project.Solution.Workspace, CancellationToken.None);
+
         return applyChanges.ChangedSolution;
     }
 
     private static async Task<List<CodeAction>> GetCodeActionsAsync(Project project, Diagnostic diagnostic)
     {
-        var document = GetDocumentForDiagnostic(project, diagnostic);
+        return await GetCodeActionsAsync(project, ImmutableArray.Create(diagnostic));
+    }
+
+    private static async Task<List<CodeAction>> GetCodeActionsAsync(Project project, ImmutableArray<Diagnostic> diagnostics)
+    {
+        Assert.NotEmpty(diagnostics);
+
+        var document = GetDocumentForDiagnostic(project, diagnostics[0]);
         List<CodeAction> actions = new();
         var provider = new RitsuLibLocalizationCodeFixProvider();
+        var span = diagnostics[0].Location.IsInSource ? diagnostics[0].Location.SourceSpan : default;
         var context = new CodeFixContext(
             document,
-            diagnostic,
+            span,
+            diagnostics,
             (action, _) => actions.Add(action),
             CancellationToken.None);
 
@@ -705,33 +739,6 @@ public sealed partial class RitsuLibModAnalyzerTests
         return directory;
     }
 
-    private sealed class FixAllDiagnosticProvider : FixAllContext.DiagnosticProvider
-    {
-        private readonly ImmutableArray<Diagnostic> _diagnostics;
-
-        public FixAllDiagnosticProvider(ImmutableArray<Diagnostic> diagnostics)
-        {
-            _diagnostics = diagnostics;
-        }
-
-        public override Task<IEnumerable<Diagnostic>> GetAllDiagnosticsAsync(Project project, CancellationToken cancellationToken)
-        {
-            return Task.FromResult<IEnumerable<Diagnostic>>(_diagnostics);
-        }
-
-        public override Task<IEnumerable<Diagnostic>> GetDocumentDiagnosticsAsync(Document document, CancellationToken cancellationToken)
-        {
-            return Task.FromResult<IEnumerable<Diagnostic>>(
-                _diagnostics.Where(d => d.Location.IsInSource && d.Location.SourceTree?.FilePath == document.FilePath));
-        }
-
-        public override Task<IEnumerable<Diagnostic>> GetProjectDiagnosticsAsync(Project project, CancellationToken cancellationToken)
-        {
-            return Task.FromResult<IEnumerable<Diagnostic>>(
-                _diagnostics.Where(d => !d.Location.IsInSource));
-        }
-    }
-
     private sealed class InMemoryAdditionalText : AdditionalText
     {
         private readonly SourceText _text;
@@ -776,7 +783,20 @@ public sealed partial class RitsuLibModAnalyzerTests
         {
             Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrWhiteSpace(projectDirectory))
+            {
                 options["build_property.MSBuildProjectDirectory"] = projectDirectory!;
+                options["build_property.ProjectDir"] = projectDirectory!;
+                options["build_property.MSBuildProjectFullPath"] = Path.Combine(projectDirectory!, "AnalyzerTests.csproj");
+            }
+
+            _globalOptions = new InMemoryAnalyzerConfigOptions(options);
+        }
+
+        public InMemoryAnalyzerConfigOptionsProvider(IReadOnlyDictionary<string, string> buildProperties)
+        {
+            Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var buildProperty in buildProperties)
+                options["build_property." + buildProperty.Key] = buildProperty.Value;
 
             _globalOptions = new InMemoryAnalyzerConfigOptions(options);
         }
