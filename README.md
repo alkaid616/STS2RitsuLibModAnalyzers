@@ -9,7 +9,7 @@
 在 mod 项目中引用 analyzer 包：
 
 ```xml
-<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.7.0" PrivateAssets="all" />
+<PackageReference Include="Nothing.STS2RitsuLib.ModAnalyzers" Version="0.8.0" PrivateAssets="all" />
 ```
 
 包会通过 `buildTransitive` 自动收集常见文件。如果你关闭了自动收集，也可以手动把本地化 JSON 暴露给 analyzer：
