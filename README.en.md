@@ -21,22 +21,29 @@ The package collects common files automatically through `buildTransitive`. If au
 Supported layouts:
 
 ```text
-localization/eng/cards.json
+localization/eng/cards.json          # game LocTable
 localization/zhs/cards.json
 localization/eng/card_keywords.json
-localization/eng.json
+localization/eng.json                # RitsuLib I18N (one-segment layout)
 localization/zhs.json
+localization/settings/eng.json       # RitsuLib I18N bridge feature subdirectory
 ```
 
-`localization/{lang}/{table}.json` is treated as a game LocString table.
-`localization/{lang}.json` is treated as a RitsuLib `I18N` file.
-Languages are discovered from `localization/<language>` directories; an empty language directory still participates in RITSU001 checks.
+Layout disambiguation (matches `I18N.NormalizeLanguageCode`):
+
+- `localization/<lang>/<table>.json` — first segment is a recognized language code (eng / zhs / jpn / kor / deu / esp / fra / ita / pol / ptb / rus / tha / tur, plus aliases) → game LocTable.
+- `localization/<lang>.json` — single segment whose basename is a recognized language code → I18N file.
+- `localization/<feature>/<lang>.json` (and deeper) — first segment is NOT a language code, but the file basename IS → I18N bridge feature folder (`pckFolders` style).
+
+Languages are discovered from the directories under `localization/`; empty language directories still participate in RITSU001 checks.
 
 ## Diagnostics
 
 | ID | Severity | Description |
 | --- | --- | --- |
 | `RITSU001` | Error / Warning | Missing RitsuLib localization keys; missing keys are warnings when another language already has that key, otherwise errors. |
+| `RITSU002` | Warning | An ancient dialogue sequence mixes lines with and without the trailing `r` suffix within the same `{idx}-` group. The vanilla resolver prefers the `r` variant, so mixed lines can be silently skipped. |
+| `RITSU003` | Info | A `localization/<lang>/<table>.json` file uses a table name outside the known game LocTable set (typo or non-conventional name). The game LocManager will not load the file. |
 | `RITSU013` | Warning | Resource path shape or existence issue. |
 
 `RITSU001` checks:
@@ -45,13 +52,25 @@ Languages are discovered from `localization/<language>` directories; an empty la
 - card pile and top-bar button `static_hover_tips`
 - RitsuLib content model localization keys, such as cards, powers, relics, characters, and ancients
 - constant keys passed to `I18N.Get`, `I18N.TryGet`, and `I18N.ContainsKey`
-- Ancient dialogue keys
+- Ancient dialogue keys (4-variant any-of: any of `0-0.ancient` / `0-0r.ancient` / `0-0.char` / `0-0r.char` satisfies the requirement)
 - `*LocKey` / `*Key` named parameters on ModSettings attributes
 - `WithSharedTooltip` / `WithTooltip` dynamic var tooltips
 
 `RITSU001` only tracks recognized RitsuLib API calls; same-named ordinary methods such as `ModelDb.Power<T>()` or local helpers do not create localization diagnostics.
 
 `RITSU001` computes severity per key: missing `eng` keys are warnings when any non-`eng` language already has the key, otherwise errors; missing non-`eng` keys are errors when `eng` is also missing the key, and warnings when `eng` already has it. Mixed errors and warnings in the same JSON are reported as separate diagnostics.
+
+`RITSU002` (Ancient dialogue r-mixed) is a structural check on `ancients.json` only. It groups keys by the `<base>{idx}-` sequence prefix and emits one warning per language per sequence when at least one line in the group uses the `r` suffix while another omits it. Sidecar keys (`.sfx`, `.next`, `-attack`, `-visit`) are excluded from the group.
+
+`RITSU003` (Unknown table) is informational only. The recognized table whitelist is:
+
+```text
+cards, relics, potions, powers, characters, events, ancients,
+encounters, acts, monsters, orbs, enchantments, afflictions,
+card_keywords, static_hover_tips, epochs, achievements, stories
+```
+
+Suppress per file with `// #pragma warning disable RITSU003` if you maintain a custom table not on the list.
 
 ## Automatic AdditionalFiles
 

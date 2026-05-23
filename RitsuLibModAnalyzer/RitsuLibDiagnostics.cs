@@ -8,6 +8,8 @@ internal static class RitsuLibDiagnostics
     public const string Category = "RitsuLib";
 
     public const string MissingLocalizationId = "RITSU001";
+    public const string AncientDialogueRepeatMixedId = "RITSU002";
+    public const string UnknownLocalizationTableId = "RITSU003";
     public const string ResourcePathId = "RITSU013";
 
     public static DiagnosticDescriptor MissingLocalizationRule => new(
@@ -18,6 +20,24 @@ internal static class RitsuLibDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: RitsuLibUiText.MissingLocalizationDescription);
+
+    public static DiagnosticDescriptor AncientDialogueRepeatMixedRule => new(
+        AncientDialogueRepeatMixedId,
+        RitsuLibUiText.AncientDialogueRepeatMixedTitle,
+        RitsuLibUiText.AncientDialogueRepeatMixedMessageFormat,
+        Category,
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: RitsuLibUiText.AncientDialogueRepeatMixedDescription);
+
+    public static DiagnosticDescriptor UnknownLocalizationTableRule => new(
+        UnknownLocalizationTableId,
+        RitsuLibUiText.UnknownLocalizationTableTitle,
+        RitsuLibUiText.UnknownLocalizationTableMessageFormat,
+        Category,
+        DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: RitsuLibUiText.UnknownLocalizationTableDescription);
 
     public static DiagnosticDescriptor ResourcePathRule => new(
         ResourcePathId,
@@ -32,6 +52,8 @@ internal static class RitsuLibDiagnostics
     {
         return ImmutableArray.Create(
             MissingLocalizationRule,
+            AncientDialogueRepeatMixedRule,
+            UnknownLocalizationTableRule,
             ResourcePathRule);
     }
 

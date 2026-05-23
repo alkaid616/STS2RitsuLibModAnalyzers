@@ -482,6 +482,185 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                     ReportMissingLocalization(context, requirement);
                 }
             }
+
+            ReportAncientDialogueRepeatMixedDiagnostics(context);
+            ReportUnknownLocalizationTableDiagnostics(context);
+        }
+
+        /// <summary>
+        ///     RITSU002: Each ancient dialogue sequence (<c>base{idx}-{line}[r].(ancient|char)</c>) must keep its
+        ///     line keys uniformly using or omitting the trailing 'r'. The vanilla resolver
+        ///     (<see cref="STS2RitsuLib.Localization.AncientDialogueLocalization.ExistingLine" />) prefers the 'r'
+        ///     variant first, so a half-and-half segment causes some lines to be silently skipped.
+        /// </summary>
+        private void ReportAncientDialogueRepeatMixedDiagnostics(CompilationAnalysisContext context)
+        {
+            foreach (var language in _localization.Languages)
+            {
+                var keys = _localization.GetTableKeys(language, "ancients");
+                if (keys.Count == 0)
+                    continue;
+
+                var groups = new Dictionary<string, AncientDialogueRGroup>(StringComparer.Ordinal);
+                foreach (var key in keys)
+                {
+                    if (!TryParseAncientDialogueLineKey(key, out var sequencePrefix, out var hasRepeatSuffix))
+                        continue;
+
+                    if (!groups.TryGetValue(sequencePrefix, out var group))
+                    {
+                        group = new AncientDialogueRGroup();
+                        groups[sequencePrefix] = group;
+                    }
+
+                    if (hasRepeatSuffix)
+                        group.WithRepeat.Add(key);
+                    else
+                        group.WithoutRepeat.Add(key);
+                }
+
+                foreach (var pair in groups)
+                {
+                    var group = pair.Value;
+                    if (group.WithRepeat.Count == 0 || group.WithoutRepeat.Count == 0)
+                        continue;
+
+                    var path = _localization.GetTargetPath(language, "ancients", isI18N: false);
+                    var location = TryCreateFileLocation(path) ?? Location.None;
+                    var mixedKeys = group.WithRepeat
+                        .Concat(group.WithoutRepeat)
+                        .OrderBy(key => key, StringComparer.Ordinal);
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        RitsuLibDiagnostics.AncientDialogueRepeatMixedRule,
+                        location,
+                        pair.Key,
+                        path,
+                        string.Join(", ", mixedKeys)));
+                }
+            }
+        }
+
+        /// <summary>
+        ///     RITSU003: Game LocManager only loads JSON tables whose names match its known set. Any
+        ///     <c>localization/&lt;lang&gt;/&lt;X&gt;.json</c> file whose <c>&lt;X&gt;</c> is not in
+        ///     <see cref="KnownLocalizationTableNames" /> is silently ignored at runtime — flag it as Info so users
+        ///     catch typos like <c>cardz.json</c>.
+        /// </summary>
+        private void ReportUnknownLocalizationTableDiagnostics(CompilationAnalysisContext context)
+        {
+            foreach (var (language, table, path) in _localization.EnumerateTableFiles())
+            {
+                if (string.IsNullOrWhiteSpace(table))
+                    continue;
+
+                if (KnownLocalizationTableNames.Contains(table))
+                    continue;
+
+                var location = TryCreateFileLocation(path) ?? Location.None;
+                var displayPath = !string.IsNullOrWhiteSpace(path) ? path : $"{language}/{table}.json";
+                context.ReportDiagnostic(Diagnostic.Create(
+                    RitsuLibDiagnostics.UnknownLocalizationTableRule,
+                    location,
+                    displayPath,
+                    table));
+            }
+        }
+
+        /// <summary>
+        ///     Whitelist of game LocTable names recognized by the vanilla LocManager and RitsuLib content registry.
+        ///     Sourced from the docs and verified against shipping mod JSON layouts.
+        /// </summary>
+        private static readonly HashSet<string> KnownLocalizationTableNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "cards",
+            "relics",
+            "potions",
+            "powers",
+            "characters",
+            "events",
+            "ancients",
+            "encounters",
+            "acts",
+            "monsters",
+            "orbs",
+            "enchantments",
+            "afflictions",
+            "card_keywords",
+            "static_hover_tips",
+            "epochs",
+            "achievements",
+            "stories",
+        };
+
+        private static bool TryParseAncientDialogueLineKey(string key, out string sequencePrefix, out bool hasRepeatSuffix)
+        {
+            sequencePrefix = string.Empty;
+            hasRepeatSuffix = false;
+
+            // Expected shape: "<base>.<idx>-<line>[r].(ancient|char)"
+            // Where <base> ends with a literal '.', and <idx>/<line> are non-empty digits.
+            int speakerStart;
+            if (key.EndsWith(".ancient", StringComparison.Ordinal))
+                speakerStart = key.Length - ".ancient".Length;
+            else if (key.EndsWith(".char", StringComparison.Ordinal))
+                speakerStart = key.Length - ".char".Length;
+            else
+                return false;
+
+            var beforeSpeaker = key.Substring(0, speakerStart);
+            var hasR = beforeSpeaker.EndsWith("r", StringComparison.Ordinal);
+            var lineEnd = hasR ? beforeSpeaker.Length - 1 : beforeSpeaker.Length;
+            if (lineEnd <= 0)
+                return false;
+
+            // Walk back over the line digits.
+            var lineStart = lineEnd;
+            while (lineStart > 0 && IsAsciiDigit(beforeSpeaker[lineStart - 1]))
+                lineStart--;
+            if (lineStart == lineEnd || lineStart == 0 || beforeSpeaker[lineStart - 1] != '-')
+                return false;
+
+            // Walk back over the index digits.
+            var dashIndex = lineStart - 1;
+            var idxEnd = dashIndex;
+            var idxStart = idxEnd;
+            while (idxStart > 0 && IsAsciiDigit(beforeSpeaker[idxStart - 1]))
+                idxStart--;
+            if (idxStart == idxEnd || idxStart == 0 || beforeSpeaker[idxStart - 1] != '.')
+                return false;
+
+            sequencePrefix = beforeSpeaker.Substring(0, dashIndex + 1);
+            hasRepeatSuffix = hasR;
+            return true;
+        }
+
+        private static bool IsAsciiDigit(char c)
+        {
+            return c >= '0' && c <= '9';
+        }
+
+        private static Location? TryCreateFileLocation(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return null;
+
+            try
+            {
+                return Location.Create(path!, new Microsoft.CodeAnalysis.Text.TextSpan(0, 0),
+                    new Microsoft.CodeAnalysis.Text.LinePositionSpan(
+                        new Microsoft.CodeAnalysis.Text.LinePosition(0, 0),
+                        new Microsoft.CodeAnalysis.Text.LinePosition(0, 0)));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private sealed class AncientDialogueRGroup
+        {
+            public List<string> WithRepeat { get; } = new();
+            public List<string> WithoutRepeat { get; } = new();
         }
 
         private void AnalyzeOwnedRegistrationAttribute(
@@ -2081,6 +2260,29 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             return isI18N
                 ? CombinePath(root, $"{language}.json")
                 : CombinePath(root, language, $"{table}.json");
+        }
+
+        /// <summary>
+        ///     Snapshot of all per-language game LocTable keys for the given table name. Returns empty when the
+        ///     language has not loaded that table. Used by RITSU002 to inspect ancients keys.
+        /// </summary>
+        public IReadOnlyCollection<string> GetTableKeys(string language, string table)
+        {
+            return _tableKeysByLanguage.TryGetValue(language, out var tables) &&
+                   tables.TryGetValue(table, out var keys)
+                ? keys
+                : Array.Empty<string>();
+        }
+
+        /// <summary>
+        ///     Enumerates every (language, table, jsonPath) tuple of game LocTable JSON files indexed for the
+        ///     compilation. Excludes I18N bridge files. Used by RITSU003.
+        /// </summary>
+        public IEnumerable<(string Language, string Table, string Path)> EnumerateTableFiles()
+        {
+            foreach (var languagePair in _tablePathsByLanguage)
+            foreach (var tablePair in languagePair.Value)
+                yield return (languagePair.Key, tablePair.Key, tablePair.Value);
         }
 
         private static string CombinePath(params string[] parts)

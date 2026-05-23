@@ -11,7 +11,7 @@ public sealed partial class RitsuLibModAnalyzerTests
             .ToArray();
 
         Assert.Equal(
-            new[] { "RITSU001", "RITSU013" },
+            new[] { "RITSU001", "RITSU002", "RITSU003", "RITSU013" },
             diagnosticIds);
     }
 }

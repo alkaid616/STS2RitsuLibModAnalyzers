@@ -21,22 +21,29 @@
 支持的本地化文件结构：
 
 ```text
-localization/eng/cards.json
+localization/eng/cards.json          # 游戏 LocTable
 localization/zhs/cards.json
 localization/eng/card_keywords.json
-localization/eng.json
+localization/eng.json                # RitsuLib I18N（单段布局）
 localization/zhs.json
+localization/settings/eng.json       # RitsuLib I18N 桥接特性子目录
 ```
 
-`localization/{lang}/{table}.json` 会被当作游戏 LocString 表。
-`localization/{lang}.json` 会被当作 RitsuLib `I18N` 文件。
-语言集合会从 `localization/<language>` 目录识别；即使某个语言目录没有 JSON 文件，也会参与 RITSU001 检查。
+路径分流规则（与 `I18N.NormalizeLanguageCode` 对齐）：
+
+- `localization/<lang>/<table>.json` — 首段是已知语言码（eng / zhs / jpn / kor / deu / esp / fra / ita / pol / ptb / rus / tha / tur 及别名）→ 游戏 LocTable。
+- `localization/<lang>.json` — 单段且文件名是已知语言码 → I18N 文件。
+- `localization/<feature>/<lang>.json`（或更深） — 首段不是语言码、文件名是 → I18N 桥接特性目录（`pckFolders` 风格）。
+
+语言集合从 `localization/` 下的目录识别；即使语言目录没有 JSON 文件也会参与 RITSU001 检查。
 
 ## 诊断
 
 | ID | 严重级别 | 说明 |
 | --- | --- | --- |
 | `RITSU001` | Error / Warning | 已发现语言的 JSON 文件中缺少 RitsuLib 本地化键；缺失 key 在其他语言已有翻译时为 Warning，否则为 Error。 |
+| `RITSU002` | Warning | Ancient 对话段在同一 `{idx}-` 组内混用带 r 与不带 r 的行。原版解析器优先匹配 r 变体，混用时部分行会被静默跳过。 |
+| `RITSU003` | Info | `localization/<lang>/<table>.json` 的 `<table>` 不在已知游戏 LocTable 白名单内（typo 或自定义名称）。游戏 LocManager 不会加载此文件。 |
 | `RITSU013` | Warning | 资源路径形状或存在性问题。 |
 
 `RITSU001` 会检查：
@@ -45,13 +52,25 @@ localization/zhs.json
 - card pile 与 top-bar button 的 `static_hover_tips`
 - RitsuLib 内容模型本地化键，例如 cards、powers、relics、characters、ancients
 - 传给 `I18N.Get`、`I18N.TryGet`、`I18N.ContainsKey` 的常量 key
-- Ancient 对话键
+- Ancient 对话键（4 变体 any-of：`0-0.ancient` / `0-0r.ancient` / `0-0.char` / `0-0r.char` 任一存在即满足）
 - ModSettings 属性中的 `*LocKey` / `*Key` 参数
 - `WithSharedTooltip` / `WithTooltip` 动态变量提示
 
 `RITSU001` 只会跟踪已识别的 RitsuLib API 调用；同名普通方法（例如 `ModelDb.Power<T>()` 或项目内自定义 helper）不会触发本地化诊断。
 
 `RITSU001` 按 key 单独判断严重级别：`eng` 缺失但任一非 `eng` 语言已存在该 key 时为 Warning，否则为 Error；非 `eng` 语言缺失且 `eng` 也缺失为 Error，`eng` 已存在时为 Warning。同一 JSON 内混合 Error / Warning 时会拆成多条诊断。
+
+`RITSU002`（Ancient 对话 r 混用）只针对 `ancients.json` 做结构性检查。按 `<base>{idx}-` 分组聚合 key，组内若同时存在带 r 与不带 r 的行 → 每语言每段一条 Warning。`.sfx`、`.next`、`-attack`、`-visit` 等附加 key 不计入分组。
+
+`RITSU003`（未知表名）只是 Info 级。已知表白名单：
+
+```text
+cards, relics, potions, powers, characters, events, ancients,
+encounters, acts, monsters, orbs, enchantments, afflictions,
+card_keywords, static_hover_tips, epochs, achievements, stories
+```
+
+如果维护自定义表，可在对应文件加 `// #pragma warning disable RITSU003` 抑制。
 
 ## 自动 AdditionalFiles
 
