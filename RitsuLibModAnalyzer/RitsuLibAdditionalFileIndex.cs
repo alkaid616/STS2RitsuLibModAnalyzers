@@ -290,22 +290,70 @@ internal sealed class RitsuLibAdditionalFileIndex
         root = path.Substring(0, markerIndex + marker.Length - 1);
         var relative = normalized.Substring(markerIndex + marker.Length);
         var parts = relative.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+        // Direct I18N layout: localization/<lang>.json  (single segment, basename is a known language code).
         if (parts.Length == 1)
         {
-            language = NormalizeLanguageCode(Path.GetFileNameWithoutExtension(parts[0]));
+            var basename = Path.GetFileNameWithoutExtension(parts[0]);
+            if (!IsKnownLanguageSegment(basename))
+                return false;
+
+            language = NormalizeLanguageCode(basename);
             table = I18NTable;
             isI18NFile = true;
             return !string.IsNullOrWhiteSpace(language);
         }
 
-        if (parts.Length >= 2)
+        if (parts.Length < 2)
+            return false;
+
+        // Game LocTable layout: localization/<lang>/<table>.json  (first segment is a known language code).
+        if (IsKnownLanguageSegment(parts[0]))
         {
             language = NormalizeLanguageCode(parts[0]);
             table = Path.GetFileNameWithoutExtension(parts[1]);
             return !string.IsNullOrWhiteSpace(language) && !string.IsNullOrWhiteSpace(table);
         }
 
-        return false;
+        // I18N bridge feature layout: localization/<feature>/.../<lang>.json
+        // (first segment is NOT a language code; file basename IS). RitsuLib I18N.pckFolders maps to any path.
+        var i18NLanguage = Path.GetFileNameWithoutExtension(parts[parts.Length - 1]);
+        if (!IsKnownLanguageSegment(i18NLanguage))
+            return false;
+
+        language = NormalizeLanguageCode(i18NLanguage);
+        table = I18NTable;
+        isI18NFile = true;
+        return !string.IsNullOrWhiteSpace(language);
+    }
+
+    /// <summary>
+    ///     Returns true when <paramref name="segment" /> normalizes to a canonical language code recognized by
+    ///     <see cref="STS2RitsuLib.Utils.I18N.NormalizeLanguageCode" />.
+    /// </summary>
+    private static bool IsKnownLanguageSegment(string? segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment))
+            return false;
+
+        var normalized = (segment ?? string.Empty).Trim().Replace('-', '_').ToLowerInvariant();
+        return normalized switch
+        {
+            "zh_cn" or "zh_hans" or "zh_sg" or "zh" or "zhs" => true,
+            "en_us" or "en_gb" or "en" or "eng" => true,
+            "ja" or "ja_jp" or "jpn" => true,
+            "ko" or "ko_kr" or "kor" => true,
+            "de" or "de_de" or "deu" => true,
+            "es" or "es_es" or "esp" => true,
+            "fr" or "fr_fr" or "fra" => true,
+            "it" or "it_it" or "ita" => true,
+            "pl" or "pl_pl" or "pol" => true,
+            "pt" or "pt_br" or "ptb" => true,
+            "ru" or "ru_ru" or "rus" => true,
+            "th" or "th_th" or "tha" => true,
+            "tr" or "tr_tr" or "tur" => true,
+            _ => false,
+        };
     }
 
     private static bool IsIgnoredPath(string path)

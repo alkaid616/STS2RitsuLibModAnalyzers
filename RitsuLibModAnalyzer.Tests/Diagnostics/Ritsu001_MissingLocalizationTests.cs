@@ -245,13 +245,13 @@ public sealed partial class RitsuLibModAnalyzerTests
     }
 
     [Theory]
-    [InlineData("HTTPServer2Card", "H_TT_P_SERVER2_CARD")]
-    [InlineData("XML2Reader", "X_M_L2_READER")]
-    [InlineData("XMLReader", "X_ML_READER")]
+    [InlineData("HTTPServer2Card", "HTTP_SERVER2_CARD")]
+    [InlineData("XML2Reader", "XML2_READER")]
+    [InlineData("XMLReader", "XML_READER")]
     [InlineData("My Strike", "MY_STRIKE")]
     [InlineData("AttrFullCard", "ATTR_FULL_CARD")]
-    [InlineData("my-mod", "MYMOD")]
-    [InlineData("Manosaba.Lin", "MANOSABALIN")]
+    [InlineData("my-mod", "MY_MOD")]
+    [InlineData("Manosaba.Lin", "MANOSABA_LIN")]
     public void NormalizePublicStemMatchesGameSlugify(string value, string expected)
     {
         Assert.Equal(expected, RitsuLibSyntaxFacts.NormalizePublicStem(value));
@@ -281,11 +281,12 @@ public sealed partial class RitsuLibModAnalyzerTests
             .Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId)
             .Select(d => d.GetMessage()));
 
-        Assert.Contains("MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD.title", message);
-        Assert.Contains("MANOSABA_LIN_CARD_X_M_L2_READER.description", message);
-        Assert.Contains("MANOSABA_LIN_CARD_X_ML_READER.title", message);
-        Assert.DoesNotContain("MANOSABA_LIN_CARD_HTTP_SERVER2_CARD", message);
-        Assert.DoesNotContain("MANOSABA_LIN_CARD_XML_READER", message);
+        Assert.Contains("MANOSABA_LIN_CARD_HTTP_SERVER2_CARD.title", message);
+        Assert.Contains("MANOSABA_LIN_CARD_XML2_READER.description", message);
+        Assert.Contains("MANOSABA_LIN_CARD_XML_READER.title", message);
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD", message);
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_X_M_L2_READER", message);
+        Assert.DoesNotContain("MANOSABA_LIN_CARD_X_ML_READER", message);
     }
 
     [Fact]
@@ -500,8 +501,32 @@ public sealed partial class RitsuLibModAnalyzerTests
             AdditionalJson(@"C:\mod\localization\eng\ancients.json", "{}"));
 
         var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
+        // GetDialoguesForKey accepts any of {0-0.ancient, 0-0r.ancient, 0-0.char, 0-0r.char}; when all are
+        // absent the analyzer reports only the canonical .ancient variant to keep the diagnostic concise.
         Assert.Contains("THE_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0.ancient", missing.GetMessage());
-        Assert.Contains("THE_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0.char", missing.GetMessage());
+        Assert.DoesNotContain("THE_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0.char", missing.GetMessage());
+    }
+
+    [Fact]
+    public async Task DoesNotReportAncientDialogueWhenAnyVariantPresent()
+    {
+        // Per AncientDialogueLocalization.DialogueExists, a dialogue is considered defined when ANY of
+        // {0-0.ancient, 0-0r.ancient, 0-0.char, 0-0r.char} is present. The analyzer must honor the
+        // any-of relation and suppress the missing diagnostic in that case.
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void UseAncientDialogue()
+                {
+                    AncientDialogueLocalization.GetDialoguesForKey("ancients", "THE_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.");
+                }
+                """),
+            AdditionalJson(@"C:\mod\localization\eng\ancients.json", """
+            {
+              "THE_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0r.char": "Hello"
+            }
+            """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
     }
 
     [Fact]
@@ -521,7 +546,9 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains(diagnostics, d =>
             d.Id == AnalyzerUnderTest.MissingLocalizationId &&
             d.GetMessage().Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0.ancient"));
-        Assert.Contains(diagnostics, d =>
+        // Only the canonical .ancient variant is reported; the other 3 dialogue line variants
+        // (0-0r.ancient, 0-0.char, 0-0r.char) are part of the same any-of group.
+        Assert.DoesNotContain(diagnostics, d =>
             d.Id == AnalyzerUnderTest.MissingLocalizationId &&
             d.GetMessage().Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.talk.MANOSABA_LIN_CHARACTER_HERO.0-0.char"));
     }
@@ -538,8 +565,10 @@ public sealed partial class RitsuLibModAnalyzerTests
 
         var missing = Assert.Single(diagnostics.Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
         Assert.Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.title", missing.GetMessage());
-        Assert.Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.epithet", missing.GetMessage());
         Assert.Contains("MANOSABA_LIN_ANCIENT_ARCHITECT.pages.INITIAL.description", missing.GetMessage());
+        // .epithet is not a real field on the ancients table (not present in RitsuLib source, docs,
+        // or any shipping mod) — verify the analyzer does not invent it.
+        Assert.DoesNotContain("MANOSABA_LIN_ANCIENT_ARCHITECT.epithet", missing.GetMessage());
     }
 
     [Fact]
@@ -1057,9 +1086,9 @@ public sealed partial class RitsuLibModAnalyzerTests
         var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/cards.json");
         var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\cards.json");
 
-        Assert.Contains("\"MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD.title\": \"\"", text);
-        Assert.Contains("\"MANOSABA_LIN_CARD_H_TT_P_SERVER2_CARD.description\": \"\"", text);
-        Assert.DoesNotContain("HTTP_SERVER2_CARD", text);
+        Assert.Contains("\"MANOSABA_LIN_CARD_HTTP_SERVER2_CARD.title\": \"\"", text);
+        Assert.Contains("\"MANOSABA_LIN_CARD_HTTP_SERVER2_CARD.description\": \"\"", text);
+        Assert.DoesNotContain("H_TT_P_SERVER2_CARD", text);
     }
 
     [Fact]

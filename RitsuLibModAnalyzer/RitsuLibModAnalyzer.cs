@@ -282,22 +282,72 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
         root = path.Substring(0, markerIndex + marker.Length - 1);
         var relative = normalized.Substring(markerIndex + marker.Length);
         var parts = relative.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+        // Direct I18N layout: localization/<lang>.json  (single segment, basename is a known language code).
         if (parts.Length == 1)
         {
-            language = NormalizeLanguageCode(Path.GetFileNameWithoutExtension(parts[0]));
+            var basename = Path.GetFileNameWithoutExtension(parts[0]);
+            if (!IsKnownLanguageSegment(basename))
+                return false;
+
+            language = NormalizeLanguageCode(basename);
             table = I18NTable;
             isI18NFile = true;
             return !string.IsNullOrWhiteSpace(language);
         }
 
-        if (parts.Length >= 2)
+        if (parts.Length < 2)
+            return false;
+
+        // Game LocTable layout: localization/<lang>/<table>.json  (first segment is a known language code).
+        if (IsKnownLanguageSegment(parts[0]))
         {
             language = NormalizeLanguageCode(parts[0]);
             table = Path.GetFileNameWithoutExtension(parts[1]);
             return !string.IsNullOrWhiteSpace(language) && !string.IsNullOrWhiteSpace(table);
         }
 
-        return false;
+        // I18N bridge feature layout: localization/<feature>/.../<lang>.json
+        // (first segment is NOT a language code; file basename IS). RitsuLib I18N.pckFolders maps to any path.
+        var i18NLanguage = Path.GetFileNameWithoutExtension(parts[parts.Length - 1]);
+        if (!IsKnownLanguageSegment(i18NLanguage))
+            return false;
+
+        language = NormalizeLanguageCode(i18NLanguage);
+        table = I18NTable;
+        isI18NFile = true;
+        return !string.IsNullOrWhiteSpace(language);
+    }
+
+    /// <summary>
+    ///     Returns true when <paramref name="segment" /> normalizes to a canonical language code recognized by
+    ///     <see cref="STS2RitsuLib.Utils.I18N.NormalizeLanguageCode" /> (eng, zhs, jpn, kor, deu, esp, fra, ita, pol,
+    ///     ptb, rus, tha, tur). Used to disambiguate game LocTable directories (where the first path segment after
+    ///     <c>/localization/</c> is a language) from I18N bridge folders (where it is a feature name).
+    /// </summary>
+    private static bool IsKnownLanguageSegment(string? segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment))
+            return false;
+
+        var normalized = (segment ?? string.Empty).Trim().Replace('-', '_').ToLowerInvariant();
+        return normalized switch
+        {
+            "zh_cn" or "zh_hans" or "zh_sg" or "zh" or "zhs" => true,
+            "en_us" or "en_gb" or "en" or "eng" => true,
+            "ja" or "ja_jp" or "jpn" => true,
+            "ko" or "ko_kr" or "kor" => true,
+            "de" or "de_de" or "deu" => true,
+            "es" or "es_es" or "esp" => true,
+            "fr" or "fr_fr" or "fra" => true,
+            "it" or "it_it" or "ita" => true,
+            "pl" or "pl_pl" or "pol" => true,
+            "pt" or "pt_br" or "ptb" => true,
+            "ru" or "ru_ru" or "rus" => true,
+            "th" or "th_th" or "tha" => true,
+            "tr" or "tr_tr" or "tur" => true,
+            _ => false,
+        };
     }
 
     private static string GetCompoundId(string modId, string typeStem, string localStem)
@@ -471,14 +521,17 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                         continue;
 
                     var baseKey = $"{ancientModel.Entry}.talk.{characterModel.Entry}.";
-                    var requirement = LocalizationRequirement.Table(
+                    var requirement = LocalizationRequirement.TableAnyOf(
                         "Ancient dialogue",
                         $"{ancientModel.Entry} -> {characterModel.Entry}",
                         ancient.Location,
                         "ancients",
+                        "dialogue:" + baseKey,
                         ImmutableArray.Create(
                             $"{baseKey}0-0.ancient",
-                            $"{baseKey}0-0.char"));
+                            $"{baseKey}0-0r.ancient",
+                            $"{baseKey}0-0.char",
+                            $"{baseKey}0-0r.char"));
                     ReportMissingLocalization(context, requirement);
                 }
             }
@@ -947,33 +1000,23 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 if (string.IsNullOrWhiteSpace(table) || string.IsNullOrWhiteSpace(baseKey))
                     return;
 
-                AddRequirement(context, LocalizationRequirement.Table(
+                AddRequirement(context, LocalizationRequirement.TableAnyOf(
                     "Ancient dialogue",
                     baseKey!,
                     invocation.GetLocation(),
                     table!,
-                    ImmutableArray.Create($"{baseKey}0-0.ancient", $"{baseKey}0-0.char")));
+                    "dialogue:" + baseKey,
+                    ImmutableArray.Create(
+                        $"{baseKey}0-0.ancient",
+                        $"{baseKey}0-0r.ancient",
+                        $"{baseKey}0-0.char",
+                        $"{baseKey}0-0r.char")));
                 return;
             }
 
-            if (methodName == "BuildDialogueSetForModAncient")
-            {
-                if (!IsRitsuLibAncientDialogueMethod(method, invocation, context.SemanticModel, context.CancellationToken))
-                    return;
-
-                var ancientEntry = GetInvocationStringArgument(invocation, method, "ancientEntry", 0, context.SemanticModel, context.CancellationToken);
-                if (string.IsNullOrWhiteSpace(ancientEntry))
-                    return;
-
-                AddRequirement(context, LocalizationRequirement.Table(
-                    "Ancient dialogue",
-                    ancientEntry!,
-                    invocation.GetLocation(),
-                    "ancients",
-                    ImmutableArray.Create(
-                        $"{ancientEntry}.talk.firstVisitEver.0-0.ancient",
-                        $"{ancientEntry}.talk.ANY.0-0.ancient")));
-            }
+            // BuildDialogueSetForModAncient: firstVisitEver and ANY dialogues are optional per
+            // AncientDialogueLocalization (firstVisitSequences.Count > 0 ? ... : null; agnostic list may be empty).
+            // No hard requirement to emit here.
         }
 
         private void AddCompoundRequirement(
@@ -1036,7 +1079,8 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                     $"{id}.title",
                     $"{id}.description",
                     $"{id}.unlockInfo",
-                    $"{id}.unlockText")));
+                    $"{id}.unlockText",
+                    $"{id}.unlock")));
         }
 
         private void ReportMissingLocalization(SyntaxNodeAnalysisContext context, LocalizationRequirement? requirement)
@@ -1063,9 +1107,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 foreach (var group in requirement.Keys.GroupBy(key => key.Table, StringComparer.OrdinalIgnoreCase))
                 {
                     var isI18N = string.Equals(group.Key, I18NTable, StringComparison.OrdinalIgnoreCase);
-                    var missing = group
-                        .Where(key => IsMissingLocalizationKey(language, isI18N, key))
-                        .Select(key => key.Key)
+                    var missing = ResolveMissingKeys(language, isI18N, group)
                         .Distinct(StringComparer.Ordinal)
                         .OrderBy(key => key, StringComparer.Ordinal)
                         .ToArray();
@@ -1144,6 +1186,46 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             return isI18N
                 ? !_localization.ContainsI18N(language, key.Key)
                 : !_localization.ContainsTable(language, key.Table, key.Key);
+        }
+
+        /// <summary>
+        ///     Filters a single-table group of required keys down to those actually missing in <paramref name="language" />,
+        ///     honoring the <see cref="RequiredLocalizationKey.AlternativeGroup" /> "any-of" relation: keys sharing the
+        ///     same non-null group are collectively satisfied if any one member is present, and report only the canonical
+        ///     (first) member when all are missing.
+        /// </summary>
+        private IEnumerable<string> ResolveMissingKeys(
+            string language,
+            bool isI18N,
+            IEnumerable<RequiredLocalizationKey> tableGroup)
+        {
+            var ungrouped = new List<RequiredLocalizationKey>();
+            var grouped = new Dictionary<string, List<RequiredLocalizationKey>>(StringComparer.Ordinal);
+
+            foreach (var key in tableGroup)
+            {
+                if (string.IsNullOrEmpty(key.AlternativeGroup))
+                {
+                    ungrouped.Add(key);
+                    continue;
+                }
+
+                if (!grouped.TryGetValue(key.AlternativeGroup!, out var members))
+                {
+                    members = new List<RequiredLocalizationKey>();
+                    grouped[key.AlternativeGroup!] = members;
+                }
+
+                members.Add(key);
+            }
+
+            foreach (var key in ungrouped)
+                if (IsMissingLocalizationKey(language, isI18N, key))
+                    yield return key.Key;
+
+            foreach (var members in grouped.Values)
+                if (members.All(member => IsMissingLocalizationKey(language, isI18N, member)))
+                    yield return members[0].Key;
         }
 
         private DiagnosticSeverity GetMissingLocalizationSeverity(string language, bool isI18N, string table, string key)
@@ -2325,6 +2407,28 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 keys.Select(key => new RequiredLocalizationKey(table, key)).ToImmutableArray());
         }
 
+        /// <summary>
+        ///     Creates a table requirement whose keys share a single <see cref="RequiredLocalizationKey.AlternativeGroup" /> —
+        ///     the requirement is satisfied when ANY of the supplied keys exists for the language. When all variants are
+        ///     missing, only the first (canonical) variant is reported.
+        /// </summary>
+        public static LocalizationRequirement TableAnyOf(
+            string displayName,
+            string subject,
+            Location location,
+            string table,
+            string alternativeGroup,
+            ImmutableArray<string> variants)
+        {
+            return new ResolvedLocalizationRequirement(
+                displayName,
+                subject,
+                location,
+                variants
+                    .Select(key => new RequiredLocalizationKey(table, key, alternativeGroup))
+                    .ToImmutableArray());
+        }
+
         public static LocalizationRequirement I18N(
             string displayName,
             string subject,
@@ -2467,13 +2571,27 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
     private readonly struct RequiredLocalizationKey
     {
         public RequiredLocalizationKey(string table, string key)
+            : this(table, key, null)
+        {
+        }
+
+        public RequiredLocalizationKey(string table, string key, string? alternativeGroup)
         {
             Table = table;
             Key = key;
+            AlternativeGroup = alternativeGroup;
         }
 
         public string Table { get; }
         public string Key { get; }
+
+        /// <summary>
+        ///     When non-null, this key is a member of an "any-of" group: the requirement is satisfied as long as ANY
+        ///     key sharing the same <c>AlternativeGroup</c> (and <c>Table</c>) is present in the language file.
+        ///     Used for cases like ancient dialogue lines where <c>.ancient | .char | r.ancient | r.char</c> are
+        ///     interchangeable per <see cref="STS2RitsuLib.Localization.AncientDialogueLocalization" />.
+        /// </summary>
+        public string? AlternativeGroup { get; }
     }
 
     private sealed class MissingLocalizationRecord
@@ -2563,13 +2681,21 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
                 "title",
                 "titleObject",
                 "description",
+                "flavor",
+                "selectMessage",
+                "victoryMessage",
+                "defeatMessage",
                 "pronounObject",
                 "possessiveAdjective",
                 "pronounPossessive",
                 "pronounSubject",
+                "goldMonologue",
+                "aromaPrinciple",
                 "cardsModifierTitle",
                 "cardsModifierDescription",
                 "eventDeathPrevention",
+                "banter.alive.endTurnPing",
+                "banter.dead.endTurnPing",
                 "unlockText"));
         }
 
@@ -2580,7 +2706,7 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
         public static ContentRegistrationInfo Monster()
         {
-            return new("monster model", "MONSTER", "monsterType", 0, CreateTemplates("monsters", "name"));
+            return new("monster model", "MONSTER", "monsterType", 0, CreateTemplates("monsters", "title"));
         }
 
         public static ContentRegistrationInfo Power()
@@ -2618,7 +2744,11 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
         public static ContentRegistrationInfo Encounter(int modelTypeArgumentIndex = 0)
         {
-            return new("encounter model", "ENCOUNTER", "encounterType", modelTypeArgumentIndex, CreateTemplates("encounters", "title", "loss"));
+            return new("encounter model", "ENCOUNTER", "encounterType", modelTypeArgumentIndex, CreateTemplates(
+                "encounters",
+                "title",
+                "loss",
+                "customRewardDescription"));
         }
 
         public static ContentRegistrationInfo Epoch(int modelTypeArgumentIndex = 0)
@@ -2631,7 +2761,6 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             return new("ancient model", "ANCIENT", "ancientType", modelTypeArgumentIndex, CreateTemplates(
                 "ancients",
                 "title",
-                "epithet",
                 "pages.INITIAL.description"));
         }
 

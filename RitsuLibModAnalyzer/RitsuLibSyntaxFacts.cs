@@ -9,9 +9,29 @@ namespace Nothing.STS2RitsuLib.ModAnalyzers;
 
 internal static class RitsuLibSyntaxFacts
 {
-    private static readonly Regex CamelCaseRegex = new("([A-Za-z0-9]|\\G(?!^))([A-Z])", RegexOptions.Compiled);
-    private static readonly Regex WhitespaceRegex = new("\\s+", RegexOptions.Compiled);
-    private static readonly Regex SpecialCharRegex = new("[^A-Z0-9_]", RegexOptions.Compiled);
+    /// <summary>
+    ///     Collapses non-alphanumeric runs into a single underscore.
+    ///     e.g. <c>"my-mod"</c> → <c>"my_mod"</c>.
+    /// </summary>
+    private static readonly Regex NonAlphaNumericRegex = new("[^A-Za-z0-9]+", RegexOptions.Compiled);
+
+    /// <summary>
+    ///     Splits a leading acronym (<c>XML</c>) from a following title-case word (<c>Reader</c>).
+    ///     e.g. <c>"XMLReader"</c> → <c>"XML_Reader"</c>, <c>"HTTP" + "Se"</c> → <c>"HTTP_Server"</c>.
+    /// </summary>
+    private static readonly Regex AcronymBoundaryRegex = new("([A-Z]+)([A-Z][a-z])", RegexOptions.Compiled);
+
+    /// <summary>
+    ///     Splits a lower-case letter or digit from a following upper-case letter.
+    ///     e.g. <c>"MyMod"</c> → <c>"My_Mod"</c>, <c>"Server2Card"</c> → <c>"Server2_Card"</c>.
+    /// </summary>
+    private static readonly Regex CamelBoundaryRegex = new("([a-z0-9])([A-Z])", RegexOptions.Compiled);
+
+    /// <summary>
+    ///     Collapses consecutive underscores into one.
+    /// </summary>
+    private static readonly Regex RepeatedUnderscoreRegex = new("_+", RegexOptions.Compiled);
+
     private static readonly Regex RecommendedIdRegex = new("^[a-z0-9][a-z0-9._-]*$", RegexOptions.Compiled);
 
     public static string GetCompoundId(string modId, string typeStem, string localStem)
@@ -19,16 +39,28 @@ internal static class RitsuLibSyntaxFacts
         return $"{NormalizePublicStem(modId)}_{typeStem.Trim().ToUpperInvariant()}_{NormalizePublicStem(localStem)}";
     }
 
+    /// <summary>
+    ///     Normalizes a public stem segment using the same 4-step pipeline as
+    ///     <c>STS2RitsuLib.Content.ModContentRegistry.NormalizePublicStem</c>:
+    ///     non-alphanumeric → underscore, acronym boundary split, camelCase boundary split,
+    ///     repeated underscore collapse, then trim and upper-case.
+    /// </summary>
     public static string NormalizePublicStem(string value)
     {
-        var text = CamelCaseRegex.Replace(value.Trim(), "$1_$2");
-        var input = WhitespaceRegex.Replace(text.ToUpperInvariant(), "_");
-        return SpecialCharRegex.Replace(input, string.Empty);
+        var normalized = NonAlphaNumericRegex.Replace(value.Trim(), "_");
+        normalized = AcronymBoundaryRegex.Replace(normalized, "$1_$2");
+        normalized = CamelBoundaryRegex.Replace(normalized, "$1_$2");
+        normalized = RepeatedUnderscoreRegex.Replace(normalized, "_");
+        return normalized.Trim('_').ToUpperInvariant();
     }
 
     public static string NormalizeFullPublicEntry(string value)
     {
-        return NormalizePublicStem(value);
+        var normalized = NonAlphaNumericRegex.Replace(value.Trim(), "_");
+        normalized = AcronymBoundaryRegex.Replace(normalized, "$1_$2");
+        normalized = CamelBoundaryRegex.Replace(normalized, "$1_$2");
+        normalized = RepeatedUnderscoreRegex.Replace(normalized, "_");
+        return normalized.Trim('_').ToUpperInvariant();
     }
 
     public static bool HasRecommendedIdShape(string value)
