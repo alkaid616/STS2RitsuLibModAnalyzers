@@ -851,6 +851,9 @@ public sealed partial class RitsuLibModAnalyzerTests
     public async Task JsonCodeFixCreatesMissingTableFile()
     {
         using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory("eng");
+        var cardsPath = Path.Combine(projectDirectory, "localization", "eng", "cards.json");
+        var hoverTipsPath = Path.Combine(projectDirectory, "localization", "eng", "static_hover_tips.json");
         var project = CreateProject(
             Source("""
                 public static void RegisterUi()
@@ -858,15 +861,17 @@ public sealed partial class RitsuLibModAnalyzerTests
                     ModCardPileRegistry.For(MainFile.ModId).RegisterOwned("test_pile", new ModCardPileSpec());
                 }
                 """),
-            AdditionalFile(@"C:\mod\localization\eng\cards.json", "{}"));
+            projectDirectory,
+            AdditionalFile(cardsPath, "{}"));
 
         var diagnostic = Assert.Single((await AnalyzeProjectAsync(project)).Where(d => d.Id == AnalyzerUnderTest.MissingLocalizationId));
-        var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/static_hover_tips.json");
-        var text = await GetAdditionalTextAsync(changed, @"C:\mod\localization\eng\static_hover_tips.json");
+        _ = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to eng/static_hover_tips.json");
+        var text = await File.ReadAllTextAsync(hoverTipsPath);
 
         Assert.Contains("\"MANOSABA_LIN_CARDPILE_TEST_PILE.title\": \"\"", text);
         Assert.Contains("\"MANOSABA_LIN_CARDPILE_TEST_PILE.description\": \"\"", text);
         Assert.Contains("\"MANOSABA_LIN_CARDPILE_TEST_PILE.empty\": \"\"", text);
+        AssertValidJson(text);
     }
 
     [Fact]
@@ -1370,8 +1375,8 @@ public sealed partial class RitsuLibModAnalyzerTests
 
         var engPath = Path.Combine(projectDirectory, "localization", "eng", "cards.json");
         var zhsPath = Path.Combine(projectDirectory, "localization", "zhs", "cards.json");
-        var engText = await GetAdditionalTextAsync(changed, engPath);
-        var zhsText = await GetAdditionalTextAsync(changed, zhsPath);
+        var engText = await File.ReadAllTextAsync(engPath);
+        var zhsText = await File.ReadAllTextAsync(zhsPath);
 
         Assert.True(File.Exists(engPath));
         Assert.True(File.Exists(zhsPath));
@@ -1379,8 +1384,44 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
-        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", await File.ReadAllTextAsync(engPath));
-        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", await File.ReadAllTextAsync(zhsPath));
+        Assert.Empty(changed.Projects.Single().AdditionalDocuments);
+        AssertValidJson(engText);
+        AssertValidJson(zhsText);
+    }
+
+    [Fact]
+    public async Task JsonCodeFixUpdatesExistingAdditionalDocumentWithoutPhysicalWrite()
+    {
+        using var culture = UseCulture("en-US");
+        var projectDirectory = CreateTemporaryProjectDirectory("eng");
+        var charactersPath = Path.Combine(projectDirectory, "localization", "eng", "characters.json");
+        var originalDiskText = """
+        {
+          "MANOSABA_LIN_CHARACTER_HERO.title": "Hero"
+        }
+        """;
+        File.WriteAllText(charactersPath, originalDiskText);
+
+        var project = CreateProject(
+            Source("""
+                [RegisterCharacter]
+                public sealed class Hero { }
+                """),
+            projectDirectory,
+            AdditionalFile(charactersPath, originalDiskText));
+
+        var diagnostic = (await AnalyzeProjectAsync(project, projectDirectory))
+            .First(d => d.Id == AnalyzerUnderTest.MissingLocalizationId && d.GetMessage().Contains("characters.json"));
+        var changed = await ApplyCodeFixAsync(project, diagnostic, "Fix all missing localization issues");
+
+        var changedText = await GetAdditionalTextAsync(changed, charactersPath);
+        var diskText = await File.ReadAllTextAsync(charactersPath);
+
+        Assert.Contains("\"MANOSABA_LIN_CHARACTER_HERO.title\": \"Hero\"", changedText);
+        Assert.Contains("\"MANOSABA_LIN_CHARACTER_HERO.description\": \"\"", changedText);
+        Assert.Contains("\"MANOSABA_LIN_CHARACTER_HERO.flavor\": \"\"", changedText);
+        AssertValidJson(changedText);
+        Assert.Equal(originalDiskText, diskText);
     }
 
     [Fact]
@@ -1408,13 +1449,13 @@ public sealed partial class RitsuLibModAnalyzerTests
         var changed = await ApplyCodeFixAsync(project, diagnostic, "Add missing localization to zhs/cards.json");
 
         var engText = await GetAdditionalTextAsync(changed, engCardsPath);
-        var zhsText = await GetAdditionalTextAsync(changed, zhsCardsPath);
+        var zhsText = await File.ReadAllTextAsync(zhsCardsPath);
 
         Assert.True(File.Exists(zhsCardsPath));
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"Existing\"", engText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
-        Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", await File.ReadAllTextAsync(zhsCardsPath));
+        AssertValidJson(zhsText);
     }
 
     [Fact]
@@ -1440,14 +1481,16 @@ public sealed partial class RitsuLibModAnalyzerTests
         var changed = await ApplyCodeFixAsync(project, diagnostic, "Fix all missing localization issues");
 
         var engText = await GetAdditionalTextAsync(changed, engCardsPath);
-        var zhsText = await GetAdditionalTextAsync(changed, Path.Combine(projectDirectory, "localization", "zhs", "cards.json"));
+        var zhsPath = Path.Combine(projectDirectory, "localization", "zhs", "cards.json");
+        var zhsText = await File.ReadAllTextAsync(zhsPath);
 
         Assert.Equal(1, CountOccurrences(engText, "\"MANOSABA_LIN_CARD_MY_CARD.title\""));
-        Assert.True(File.Exists(Path.Combine(projectDirectory, "localization", "zhs", "cards.json")));
+        Assert.True(File.Exists(zhsPath));
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"Existing\"", engText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", engText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.title\": \"\"", zhsText);
         Assert.Contains("\"MANOSABA_LIN_CARD_MY_CARD.description\": \"\"", zhsText);
+        AssertValidJson(zhsText);
     }
 
     [Fact]

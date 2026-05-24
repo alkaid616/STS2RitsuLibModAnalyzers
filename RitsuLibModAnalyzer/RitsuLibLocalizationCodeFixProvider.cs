@@ -195,6 +195,9 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return request == null
             ? string.Empty
             : request.TargetPath + "\u001f" +
+              request.Language + "\u001f" +
+              request.Table + "\u001f" +
+              request.IsI18N + "\u001f" +
               string.Join(RitsuLibDiagnosticProperties.ListSeparator, request.Entries.Select(entry => entry.Key));
     }
 
@@ -761,6 +764,55 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
             : value.Split(new[] { RitsuLibDiagnosticProperties.ListSeparator }, StringSplitOptions.None);
     }
 
+    private static ImmutableArray<LocalizationFixRequest> DeduplicateLocalizationFixRequests(
+        ImmutableArray<LocalizationFixRequest> requests)
+    {
+        var seenEntries = new HashSet<string>(StringComparer.Ordinal);
+        var builders = new Dictionary<string, LocalizationFixRequestBuilder>(StringComparer.Ordinal);
+        var order = new List<string>();
+
+        foreach (var request in requests)
+        {
+            var requestKey = GetLocalizationFixRequestGroupKey(request);
+            if (!builders.TryGetValue(requestKey, out var builder))
+            {
+                builder = new LocalizationFixRequestBuilder(request);
+                builders[requestKey] = builder;
+                order.Add(requestKey);
+            }
+
+            foreach (var entry in request.Entries)
+            {
+                if (seenEntries.Add(GetLocalizationFixRequestEntryKey(request, entry.Key)))
+                    builder.Entries.Add(entry);
+            }
+        }
+
+        return order
+            .Select(key => builders[key])
+            .Where(builder => builder.Entries.Count > 0)
+            .Select(builder => builder.ToRequest())
+            .ToImmutableArray();
+    }
+
+    private static string GetLocalizationFixRequestGroupKey(LocalizationFixRequest request)
+    {
+        return NormalizeDeduplicationPart(request.TargetPath) + "\u001f" +
+               NormalizeDeduplicationPart(request.Language) + "\u001f" +
+               NormalizeDeduplicationPart(request.Table) + "\u001f" +
+               request.IsI18N;
+    }
+
+    private static string GetLocalizationFixRequestEntryKey(LocalizationFixRequest request, string key)
+    {
+        return GetLocalizationFixRequestGroupKey(request) + "\u001f" + key;
+    }
+
+    private static string NormalizeDeduplicationPart(string? value)
+    {
+        return (value ?? string.Empty).ToUpperInvariant();
+    }
+
     private static async Task<LocalizationJsonChange> AddMissingKeysForProjectAsync(
         Project project,
         ImmutableArray<LocalizationFixRequest> fallbackRequests,
@@ -831,57 +883,57 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         if (project == null)
             return LocalizationJsonChange.Empty(solution);
 
+        requests = DeduplicateLocalizationFixRequests(requests);
         var fileWrites = ImmutableArray.CreateBuilder<LocalizationFileWrite>();
 
         foreach (var group in requests.GroupBy(request => request.TargetPath, StringComparer.OrdinalIgnoreCase))
         {
+            var groupRequests = group.ToImmutableArray();
             var targetPath = group.Key;
             var fullPath = ResolveFullPath(targetPath, project);
             var document = FindAdditionalDocument(project, targetPath);
-            var existingText = document == null
-                ? ReadLocalizationFile(fullPath) ?? string.Empty
-                : (await document.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString();
+            var writeMode = GetLocalizationJsonWriteMode(document, fullPath);
+
+            string existingText;
+            if (document == null)
+            {
+                existingText = ReadLocalizationFile(fullPath) ?? string.Empty;
+            }
+            else
+            {
+                existingText = (await document.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString();
+            }
 
             if (!CanPatchTopLevelObject(existingText))
                 continue;
 
             var existingKeys = RitsuLibAdditionalFileIndex.JsonTopLevelKeyScanner.ReadKeys(existingText);
-            var entries = group
+            var requestedEntries = groupRequests
                 .SelectMany(request => request.Entries)
+                .ToImmutableArray();
+            var distinctEntries = requestedEntries
                 .GroupBy(entry => entry.Key, StringComparer.Ordinal)
                 .Select(entry => entry.First())
+                .ToImmutableArray();
+            var entries = distinctEntries
                 .Where(entry => !existingKeys.Contains(entry.Key))
                 .OrderBy(entry => entry.Key, StringComparer.Ordinal)
                 .ToImmutableArray();
 
             if (entries.Length == 0)
-            {
-                if (document == null && !string.IsNullOrEmpty(existingText))
-                {
-                    var existingDocumentId = DocumentId.CreateNewId(projectId, Path.GetFileName(targetPath));
-                    solution = solution.AddAdditionalDocument(
-                        existingDocumentId,
-                        Path.GetFileName(targetPath),
-                        SourceText.From(existingText, Encoding.UTF8),
-                        folders: ImmutableArray<string>.Empty,
-                        filePath: targetPath);
-
-                    project = solution.GetProject(projectId);
-                    if (project == null)
-                        return new LocalizationJsonChange(solution, fileWrites.ToImmutable());
-                }
-
                 continue;
-            }
 
             var updatedContent = AddEntriesToJsonObject(existingText, entries);
             var updatedText = SourceText.From(updatedContent, Encoding.UTF8);
-            if (ShouldWritePhysicalLocalizationFile(fullPath))
-                fileWrites.Add(new LocalizationFileWrite(fullPath, updatedContent));
+            var shouldWritePhysicalFile = writeMode == LocalizationJsonWriteMode.PhysicalFile;
 
-            if (document != null)
+            if (shouldWritePhysicalFile)
             {
-                solution = solution.WithAdditionalDocumentText(document.Id, updatedText);
+                fileWrites.Add(new LocalizationFileWrite(fullPath, updatedContent));
+            }
+            else if (document != null)
+            {
+                solution = solution.WithAdditionalDocumentText(document.Id, updatedText, PreservationMode.PreserveIdentity);
             }
             else
             {
@@ -1606,6 +1658,16 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         return !string.IsNullOrWhiteSpace(fullPath) && Path.IsPathRooted(fullPath);
     }
 
+    private static LocalizationJsonWriteMode GetLocalizationJsonWriteMode(TextDocument? document, string fullPath)
+    {
+        if (document != null)
+            return LocalizationJsonWriteMode.WorkspaceAdditionalDocument;
+
+        return ShouldWritePhysicalLocalizationFile(fullPath)
+            ? LocalizationJsonWriteMode.PhysicalFile
+            : LocalizationJsonWriteMode.WorkspaceAdditionalDocumentFallback;
+    }
+
     private sealed class LocalizationJsonCodeAction : CodeAction
     {
         private readonly string _title;
@@ -1684,6 +1746,13 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         }
     }
 
+    private enum LocalizationJsonWriteMode
+    {
+        WorkspaceAdditionalDocument,
+        PhysicalFile,
+        WorkspaceAdditionalDocumentFallback,
+    }
+
     private readonly struct LocalizationFileWrite
     {
         public LocalizationFileWrite(string fullPath, string content)
@@ -1730,6 +1799,29 @@ public sealed class RitsuLibLocalizationCodeFixProvider : CodeFixProvider
         public bool IsI18N { get; }
         public ImmutableArray<KeyValuePair<string, string>> Entries { get; }
 
+    }
+
+    private sealed class LocalizationFixRequestBuilder
+    {
+        public LocalizationFixRequestBuilder(LocalizationFixRequest request)
+        {
+            TargetPath = request.TargetPath;
+            Language = request.Language;
+            Table = request.Table;
+            IsI18N = request.IsI18N;
+            Entries = ImmutableArray.CreateBuilder<KeyValuePair<string, string>>();
+        }
+
+        public string TargetPath { get; }
+        public string Language { get; }
+        public string Table { get; }
+        public bool IsI18N { get; }
+        public ImmutableArray<KeyValuePair<string, string>>.Builder Entries { get; }
+
+        public LocalizationFixRequest ToRequest()
+        {
+            return new(TargetPath, Language, Table, IsI18N, Entries.ToImmutable());
+        }
     }
 
     private sealed class ResourcePathTodoInsertion
