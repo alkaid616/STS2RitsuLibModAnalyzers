@@ -1920,11 +1920,21 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
 
             var typeArgument = ResolveModelTypeSyntax(invocation, info);
             if (typeArgument != null)
+            {
+                var resolvedType = semanticModel.GetTypeInfo(typeArgument, cancellationToken).Type;
+                if (resolvedType is ITypeParameterSymbol)
+                    return null;
                 return typeArgument.ToString().Split('.').Last();
+            }
 
             var argument = FindInvocationArgument(invocation, method, info.ModelTypeParameterName, info.ModelTypeArgumentIndex);
             if (argument?.Expression is TypeOfExpressionSyntax typeOf)
+            {
+                var resolvedType = semanticModel.GetTypeInfo(typeOf.Type, cancellationToken).Type;
+                if (resolvedType is ITypeParameterSymbol)
+                    return null;
                 return typeOf.Type.ToString().Split('.').Last();
+            }
 
             return null;
         }
