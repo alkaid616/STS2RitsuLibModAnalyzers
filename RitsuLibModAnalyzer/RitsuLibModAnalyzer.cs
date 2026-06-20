@@ -777,6 +777,9 @@ public sealed partial class RitsuLibModAnalyzer : DiagnosticAnalyzer
             if (typeDeclaration == null)
                 return;
 
+            if (typeDeclaration.Modifiers.Any(SyntaxKind.AbstractKeyword))
+                return;
+
             var ownerModId = ResolveAttributeOwnerModId(attribute, context.SemanticModel, context.CancellationToken);
             var publicEntry = ResolveAttributePublicEntry(attribute, context.SemanticModel, context.CancellationToken);
             AddModelRequirement(context, info, typeDeclaration.Identifier.ValueText, publicEntry, ownerModId, attribute.GetLocation());
