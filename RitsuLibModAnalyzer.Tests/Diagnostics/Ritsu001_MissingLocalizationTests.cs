@@ -7,7 +7,7 @@ public sealed partial class RitsuLibModAnalyzerTests
     {
         var descriptor = GetSupportedDiagnostic("RITSU001");
 
-        Assert.Equal(DiagnosticSeverity.Error, descriptor.DefaultSeverity);
+        Assert.Equal(DiagnosticSeverity.Warning, descriptor.DefaultSeverity);
     }
 
     [Fact]
@@ -1536,6 +1536,31 @@ public sealed partial class RitsuLibModAnalyzerTests
         Assert.Contains("zhs/cards.json", missing.GetMessage());
     }
 
+    [Fact]
+    public async Task DoesNotReportLocalizationForAbstractClass()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                [RegisterCharacter]
+                public abstract class BaseCharacter { }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
+    }
+
+    [Fact]
+    public async Task DoesNotReportLocalizationForGenericTypeParameter()
+    {
+        var diagnostics = await AnalyzeAsync(
+            Source("""
+                public static void RegisterCharacterCard<T>() where T : class
+                {
+                    // Generic type parameter should not trigger localization check
+                }
+                """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == AnalyzerUnderTest.MissingLocalizationId);
+    }
     [Fact]
     public void FixAllProviderIsNotExposed()
     {
