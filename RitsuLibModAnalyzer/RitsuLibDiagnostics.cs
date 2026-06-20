@@ -17,7 +17,7 @@ internal static class RitsuLibDiagnostics
         RitsuLibUiText.MissingLocalizationTitle,
         RitsuLibUiText.MissingLocalizationMessageFormat,
         Category,
-        DiagnosticSeverity.Error,
+        DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: RitsuLibUiText.MissingLocalizationDescription);
 
